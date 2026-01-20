@@ -150,15 +150,26 @@ def read_users_me(current_user: User = Depends(get_current_user_mandatory)):
 # 👇👇👇 نقطة الاتصال لاقتراح سهم ذكي 👇👇👇
 @app.get("/suggest-stock")
 def suggest_stock():
-    """Asks the AI to pick a high-potential stock dynamically."""
+    """Asks the AI to pick a high-potential stock dynamically with a temperature boost for variety."""
     try:
-        prompt = "Act as a senior financial analyst. Suggest ONE stock ticker that has massive future growth potential and high market expectations right now. Return ONLY the ticker symbol (e.g. NVDA). Do not write any other text."
-        response = model.generate_content(prompt)
+        # أضفنا طلب التنوع (randomly pick) وتعديل الـ Temperature لزيادة العشوائية
+        prompt = "Act as a senior financial analyst. Pick ONE high-potential stock ticker from the US market (NYSE/NASDAQ) that is trending or has a strong growth catalyst. Return ONLY the ticker symbol (e.g. TSLA). Do not repeat NVDA every time, try to be diverse. Return ONLY the symbol."
+        
+        # استخدام الـ Generation Config لزيادة العشوائية (Temperature)
+        response = model.generate_content(
+            prompt,
+            generation_config=genai.types.GenerationConfig(
+                temperature=0.9, # كلما زاد الرقم زاد التنوع (بين 0 و 1)
+            )
+        )
         ticker = response.text.strip().replace("\n", "").replace(" ", "").upper()
         clean_ticker = re.sub(r'[^A-Z]', '', ticker)
         return {"ticker": clean_ticker}
     except:
-        return {"ticker": "NVDA"}
+        # قائمة احتياطية في حال فشل الـ AI عشان ما يعطي دايماً NVDA
+        import random
+        backups = ["MSFT", "AAPL", "AMD", "META", "GOOGL", "AMZN", "PYPL", "V"]
+        return {"ticker": random.choice(backups)}
 
 def get_real_financial_data(ticker: str):
     try:
