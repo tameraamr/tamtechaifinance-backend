@@ -69,11 +69,20 @@ except:
 
 app = FastAPI()
 
+# 👇 أضف هذا القسم المحدث هنا بالضبط للسماح بالدومين الجديد
+origins = [
+    "http://localhost:3000",
+    "https://tamtech-frontend.vercel.app",
+    "https://tamtech-finance.com",
+    "https://www.tamtech-finance.com",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], 
+    allow_origins=origins, # تم تغيير ["*"] إلى القائمة المحددة أعلاه للحماية ولعمل الدومين الجديد
     allow_credentials=True,
     allow_methods=["*"],
+    allow_headers=["*"],
     allow_headers=["*"],
 )
 
