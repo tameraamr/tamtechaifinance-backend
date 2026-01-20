@@ -395,3 +395,58 @@ def get_market_pulse():
     except Exception as e:
         print(f"Error fetching pulse: {e}")
         return []
+
+# --- Comparison Route (Costs 2 Credits) ---
+@app.get("/analyze-compare/{ticker1}/{ticker2}")
+async def analyze_compare(
+    ticker1: str, 
+    ticker2: str, 
+    lang: str = "en", 
+    db: Session = Depends(get_db), 
+    current_user: User = Depends(get_current_user_mandatory)
+):
+    # 1. التحقق من الرصيد (خصم 2 كريدت)
+    if current_user.credits < 2:
+        raise HTTPException(status_code=402, detail="Insufficient credits. 2 credits required.")
+
+    try:
+        # 2. جلب بيانات السهمين
+        data1 = get_real_financial_data(ticker1)
+        data2 = get_real_financial_data(ticker2)
+        
+        if not data1 or not data2:
+            raise HTTPException(status_code=404, detail="One or both stocks not found")
+
+        # تجهيز البيانات للذكاء الاصطناعي
+        ai_payload1 = {k: v for k, v in data1.items() if k != 'chart_data'}
+        ai_payload2 = {k: v for k, v in data2.items() if k != 'chart_data'}
+
+        lang_map = {"en": "English", "ar": "Arabic", "it": "Italian"}
+        target_lang = lang_map.get(lang, "English")
+
+        # 3. أمر التحليل والمقارنة
+        prompt = f"""
+        Compare {ticker1} and {ticker2} side-by-side as a Senior Analyst.
+        Data 1: {json.dumps(ai_payload1)}
+        Data 2: {json.dumps(ai_payload2)}
+        Language: {target_lang}
+        Return strictly JSON with keys: 'verdict' (detailed analysis), 'winner' (ticker), 'comparison_summary'.
+        """
+        
+        response = model.generate_content(prompt, generation_config={"response_mime_type": "application/json"})
+        analysis_result = json.loads(response.text)
+
+        # 4. خصم الكريدت وتحديث الداتابيز
+        current_user.credits -= 2
+        db.commit()
+
+        return {
+            "analysis": analysis_result,
+            "stock1": data1,
+            "stock2": data2,
+            "credits_left": current_user.credits
+        }
+    except Exception as e:
+        db.rollback()
+        print(f"Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
