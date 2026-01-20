@@ -363,4 +363,35 @@ async def verify_license(request: LicenseRequest, db: Session = Depends(get_db),
     except Exception as e: 
         return {"valid": False, "message": "Connection error with verification server"}
     
- 
+@app.get("/market-pulse")
+def get_market_pulse():
+    try:
+        # رموز ياهو فاينانس الرسمية
+        tickers = {
+            "^GSPC": "S&P 500",
+            "^IXIC": "NASDAQ",
+            "NVDA": "NVIDIA",
+            "BTC-USD": "Bitcoin",
+            "GC=F": "GOLD"
+        }
+        
+        pulse_data = []
+        for sym, name in tickers.items():
+            stock = yf.Ticker(sym)
+            info = stock.fast_info
+            current_price = info['last_price']
+            
+            # حساب نسبة التغيير
+            prev_close = stock.info.get('previousClose', current_price)
+            change = ((current_price - prev_close) / prev_close) * 100
+            
+            pulse_data.append({
+                "name": name,
+                "price": f"{current_price:,.2f}" if "Bitcoin" not in name else f"{current_price:,.0f}",
+                "change": f"{'+' if change > 0 else ''}{change:.2f}%",
+                "up": change > 0
+            })
+        return pulse_data
+    except Exception as e:
+        print(f"Error fetching pulse: {e}")
+        return []
