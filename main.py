@@ -426,11 +426,20 @@ async def analyze_compare(
 
         # 3. أمر التحليل والمقارنة
         prompt = f"""
-        Compare {ticker1} and {ticker2} side-by-side as a Senior Analyst.
-        Data 1: {json.dumps(ai_payload1)}
-        Data 2: {json.dumps(ai_payload2)}
+        Act as a Senior Hedge Fund Strategy Director. Conduct a 'Capital Battle' between {ticker1} and {ticker2}.
+        
+        Financial Data {ticker1}: {json.dumps(ai_payload1)}
+        Financial Data {ticker2}: {json.dumps(ai_payload2)}
         Language: {target_lang}
-        Return strictly JSON with keys: 'verdict' (detailed analysis), 'winner' (ticker), 'comparison_summary'.
+
+        ⚠️ CRITICAL INSTRUCTIONS:
+        1. Write a massive institutional memo (min 600 words).
+        2. Directly compare their Valuations (P/E, PEG). Who is a better bargain?
+        3. Compare Profitability (ROE, Operating Margins). Who is more efficient?
+        4. Discuss 'Strategic Moat': Which business model is harder to destroy?
+        5. Use a professional, aggressive financial tone.
+        
+        Return strictly JSON with keys: 'verdict' (the long essay), 'winner', 'comparison_summary'.
         """
         
         response = model.generate_content(prompt, generation_config={"response_mime_type": "application/json"})
