@@ -24,7 +24,7 @@ if DATABASE_URL:
     # نحن على سيرفر Render (نستخدم PostgreSQL)
     # تصحيح صيغة الرابط لأن SQLAlchemy يطلب postgresql://
     if DATABASE_URL.startswith("postgres://"):
-        DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+        DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+psycopg2://", 1)
     
     engine = create_engine(DATABASE_URL)
 else:
