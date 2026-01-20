@@ -318,16 +318,27 @@ async def analyze_stock(
 async def verify_license(request: LicenseRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user_mandatory)):
     PRODUCT_ID = "APVOhGVIRQbt7xx1qGXtPg==" 
     try:
+        # نحن نرسل الطلب لـ Gumroad لزيادة العداد
         response = requests.post("https://api.gumroad.com/v2/licenses/verify",
             data={"product_id": PRODUCT_ID, "license_key": request.license_key, "increment_uses_count": "true"})
         data = response.json()
         
+        # التأكد من نجاح التحقق وعدم وجود استرجاع أموال
         if data.get("success") == True and not data.get("purchase", {}).get("refunded"):
-            if data.get("purchase", {}).get("uses_count", 1) > 1:
-                return {"valid": False, "message": "Key used already."}
+            # 👇 التعديل الجوهري هنا:
+            # Gumroad يرجع عدد الاستخدامات *بعد* الزيادة. 
+            # إذا كان الكود جديداً، يجب أن يكون عدد الاستخدامات (uses) يساوي 1 بالضبط.
+            # إذا كان أكثر من 1، فهذا يعني أن شخصاً آخر استخدمه قبله.
+            uses = data.get("uses") 
             
+            if uses and uses > 1:
+                return {"valid": False, "message": "This key has already been redeemed."}
+            
+            # إذا وصل الكود هنا، معناه أول مرة يستخدم
             current_user.credits += 50
             db.commit()
             return {"valid": True, "credits": current_user.credits}
-        return {"valid": False, "message": "Invalid key"}
-    except: return {"valid": False, "message": "Error"}
+            
+        return {"valid": False, "message": "Invalid license key or already used."}
+    except Exception as e: 
+        return {"valid": False, "message": "Connection error with verification server"}
