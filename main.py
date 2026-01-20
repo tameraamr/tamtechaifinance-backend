@@ -18,17 +18,19 @@ import re
 
 # --- Database & Security (Deployment Ready) ---
 # 👇 هذا الكود الذكي يختار القاعدة المناسبة تلقائياً
+# --- Database & Security (Deployment Ready) ---
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 if DATABASE_URL:
-    # نحن على سيرفر Render (نستخدم PostgreSQL)
-    # تصحيح صيغة الرابط لأن SQLAlchemy يطلب postgresql://
+    # تعديل الرابط ليعمل مع مكتبة psycopg2 سواء كان من Render أو Supabase
     if DATABASE_URL.startswith("postgres://"):
         DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+psycopg2://", 1)
+    elif DATABASE_URL.startswith("postgresql://"):
+        DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
     
     engine = create_engine(DATABASE_URL)
 else:
-    # نحن على جهازك المحلي (نستخدم SQLite)
+    # Localhost (SQLite)
     SQLALCHEMY_DATABASE_URL = "sqlite:///./users.db"
     engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
 
