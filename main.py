@@ -363,39 +363,4 @@ async def verify_license(request: LicenseRequest, db: Session = Depends(get_db),
     except Exception as e: 
         return {"valid": False, "message": "Connection error with verification server"}
     
-  # --- إضافة قسم نبض السوق في نهاية الملف ---
-
-@app.get("/market-pulse")
-def get_market_pulse():
-    try:
-        # قائمة المؤشرات (Ticker Symbols) من ياهو فاينانس
-        tickers = {
-            "^GSPC": "S&P 500",
-            "^IXIC": "NASDAQ",
-            "BTC-USD": "Bitcoin",
-            "GC=F": "Gold",
-            "DX-Y.NYB": "Dollar Index",
-            "NVDA": "NVIDIA"
-        }
-        
-        pulse_data = []
-        for sym, name in tickers.items():
-            stock = yf.Ticker(sym)
-            # جلب بيانات آخر يومين لحساب نسبة التغيير
-            hist = stock.history(period="2d")
-            if len(hist) >= 2:
-                current = hist['Close'].iloc[-1]
-                prev = hist['Close'].iloc[-2]
-                change_pct = ((current - prev) / prev) * 100
-                
-                pulse_data.append({
-                    "name": name,
-                    "price": f"{current:,.2f}" if "BTC" not in name else f"${current:,.0f}",
-                    "change": f"{'+' if change_pct > 0 else ''}{change_pct:.2f}%",
-                    "up": change_pct > 0
-                })
-        return pulse_data
-    except Exception as e:
-        print(f"Error in pulse: {e}")
-        # بيانات احتياطية في حال تعطل الـ API
-        return [{"name": "S&P 500", "price": "5,800", "change": "0.00%", "up": True}]
+ 
