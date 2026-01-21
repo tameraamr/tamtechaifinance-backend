@@ -88,11 +88,10 @@ origins = [
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins, # تم تغيير ["*"] إلى القائمة المحددة أعلاه للحماية ولعمل الدومين الجديد
+    allow_origins=["*"],  # 👈 هذا السطر يسمح لأي دومين بالاتصال (مهم جداً الآن)
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-
 )
 
 # --- Helpers ---
