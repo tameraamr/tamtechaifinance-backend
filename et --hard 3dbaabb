@@ -1,0 +1,16 @@
+[33mbdf0d40[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m)[m Backend: Added search suggestions endpoint
+[33m3dbaabb[m Edit news sentiment analysis logic to Gemini prompt
+[33mb462aa1[m Add news sentiment analysis logic to Gemini prompt
+[33m3585aec[m change compare prompt
+[33m276eb65[m add compare function
+[33m8588de3[m add market pulse
+[33m2c531ef[m cancel edit
+[33m00c9666[m added market pulse function
+[33md458b50[m Fix SyntaxError: remove repeated allow_headers
+[33mf69af56[m Update CORS for new domain tamtech-finance.com
+[33m1d36d89[m Fix: diversity in stock suggestions and backend cleanup
+[33m332b509[m Fix: Lock license key to single use
+[33m9e1c85b[m Add email-validator and update requirements
+[33ma776a69[m Fix database url for supabase
+[33md077c31[m Fix database driver
+[33md8000ad[m Upload backend
