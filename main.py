@@ -1,7 +1,8 @@
 from fastapi import FastAPI, HTTPException, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from pydantic import BaseModel, EmailStr, Field, validator
+from pydantic import BaseModel, EmailStr, Field, field_validator
+from typing import Optional
 import google.generativeai as genai
 import yfinance as yf
 import os
@@ -47,6 +48,14 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     email = Column(String, unique=True, index=True)
     hashed_password = Column(String)
+    
+    # البيانات الشخصية الجديدة
+    first_name = Column(String)
+    last_name = Column(String)
+    phone_number = Column(String)
+    country = Column(String)              # إجباري
+    address = Column(String, nullable=True) # اختياري
+    
     credits = Column(Integer, default=0) 
 
 # إنشاء الجداول تلقائياً
@@ -123,7 +132,14 @@ async def get_current_user_mandatory(token: str = Depends(oauth2_scheme), db: Se
 class UserCreate(BaseModel):
     email: EmailStr
     password: str = Field(..., min_length=8)
-    @validator('password')
+    
+    first_name: str
+    last_name: str
+    phone_number: str
+    country: str                    
+    address: Optional[str] = None   
+
+    @field_validator('password')
     def validate_password(cls, v):
         if not any(char.isdigit() for char in v): raise ValueError('Password must contain a number')
         return v
@@ -138,12 +154,24 @@ class LicenseRequest(BaseModel):
 # --- Routes ---
 @app.post("/register")
 def register(user: UserCreate, db: Session = Depends(get_db)):
+    # التأكد من أن الإيميل غير مستخدم سابقاً
     if db.query(User).filter(User.email == user.email).first():
         raise HTTPException(status_code=400, detail="Email already registered")
-    new_user = User(email=user.email, hashed_password=get_password_hash(user.password))
+    
+    # إنشاء المستخدم مع كافة البيانات
+    new_user = User(
+        email=user.email, 
+        hashed_password=get_password_hash(user.password),
+        first_name=user.first_name,
+        last_name=user.last_name,
+        phone_number=user.phone_number,
+        country=user.country,
+        address=user.address,
+        credits=3 # رصيد مجاني للبداية
+    )
     db.add(new_user)
     db.commit()
-    return {"message": "User created"}
+    return {"message": "User created successfully"}
 
 @app.post("/token", response_model=Token)
 def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
