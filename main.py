@@ -9,7 +9,7 @@ import os
 import json
 import requests
 from dotenv import load_dotenv
-from sqlalchemy import create_engine, Column, Integer, String, DateTime
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, func
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from datetime import datetime, timedelta
@@ -64,6 +64,15 @@ class GuestUsage(Base):
     ip_address = Column(String, primary_key=True, index=True)
     attempts = Column(Integer, default=0)
     last_attempt = Column(DateTime, default=datetime.utcnow)
+
+    # 1. إنشاء جدول لتخزين آخر التحليلات
+class AnalysisHistory(Base):
+    __tablename__ = "analysis_history"
+    id = Column(Integer, primary_key=True, index=True)
+    ticker = Column(String, index=True)
+    verdict = Column(String)  # BUY, SELL, HOLD
+    confidence_score = Column(Integer)
+    created_at = Column(DateTime, default=func.now())
 
 # إنشاء الجداول تلقائياً
 Base.metadata.create_all(bind=engine)
@@ -438,6 +447,15 @@ async def analyze_stock(
         # تحليل الرد والتأكد من تحويله لـ JSON
         analysis_json = json.loads(response.text)
 
+        # 👇 هذا الكود يحفظ السهم والنتيجة في جدول التاريخ
+        new_history = AnalysisHistory(
+            ticker=ticker.upper(),
+            verdict=analysis_json.get("verdict", "HOLD"),
+            confidence_score=analysis_json.get("confidence_score", 0)
+        )
+        db.add(new_history)
+        db.commit() # حفظ في قاعدة البيانات
+        
         return {
             "ticker": ticker.upper(), 
             "data": financial_data, 
@@ -448,6 +466,22 @@ async def analyze_stock(
     except Exception as e:
         print(f"AI Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+    
+
+@app.get("/recent-analyses")
+async def get_recent_analyses(db: Session = Depends(get_db)):
+    # جلب آخر 5 تحليلات مرتبة من الأحدث للأقدم
+    history = db.query(AnalysisHistory).order_by(AnalysisHistory.created_at.desc()).limit(5).all()
+    
+    return [
+        {
+            "ticker": h.ticker,
+            "verdict": h.verdict,
+            "confidence": h.confidence_score,
+            "time": h.created_at.strftime("%H:%M") 
+        } for h in history
+    ]
+    
 
 @app.post("/verify-license")
 async def verify_license(request: LicenseRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user_mandatory)):
