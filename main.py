@@ -613,7 +613,13 @@ async def analyze_compare(
         Return strictly JSON with keys: 'verdict' (the long essay), 'winner', 'comparison_summary'.
         """
         
-        response = model.generate_content(prompt, generation_config={"response_mime_type": "application/json"})
+        response = model.generate_content(
+    prompt, 
+    generation_config={
+        "response_mime_type": "application/json",
+        "temperature": 0.2  # 👈 هذا السطر السحري
+    }
+)
         analysis_result = json.loads(response.text)
 
         # 4. خصم الكريدت وتحديث البيانات للمسجلين
