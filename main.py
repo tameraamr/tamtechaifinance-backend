@@ -317,12 +317,12 @@ def search_ticker(ticker: str):
 @app.get("/analyze/{ticker}")
 async def analyze_stock(
     ticker: str, 
-    request: Request, # 👈 أضفنا "request" هنا للحصول على IP الزائر
+    request: Request, 
     lang: str = "en", 
     db: Session = Depends(get_db), 
     current_user: User = Depends(get_current_user_optional)
 ):
-    # --- بداية كود الحماية الجديد ---
+    # --- 🛡️ نظام التقاط الـ IP الحقيقي والحماية ---
     if current_user:
         if current_user.credits <= 0: raise HTTPException(status_code=402, detail="No credits left")
         if ticker == "#DEVMODE":
@@ -330,20 +330,25 @@ async def analyze_stock(
             db.commit()
             return {"message": "Dev Mode: 1000 Credits Added"}
     else:
-        # تتبع الزائر عبر الـ IP
-        client_ip = request.client.host
+        # 👇 التعديل الجوهري: الحصول على الـ IP الحقيقي من هيدرز Railway
+        x_forwarded_for = request.headers.get("x-forwarded-for")
+        if x_forwarded_for:
+            client_ip = x_forwarded_for.split(",")[0].strip()
+        else:
+            client_ip = request.client.host
+
         guest = db.query(GuestUsage).filter(GuestUsage.ip_address == client_ip).first()
         
         if not guest:
             guest = GuestUsage(ip_address=client_ip, attempts=0)
             db.add(guest)
         
-        if guest.attempts >= 3: # 👈 المنع بعد 3 محاولات للزائر
+        if guest.attempts >= 3: 
             raise HTTPException(status_code=403, detail="Guest limit reached. Please register.")
         
         guest.attempts += 1
         db.commit()
-    # --- نهاية كود الحماية الجديد ---
+    # --- 🛡️ نهاية نظام الحماية ---
     
     # 1. جلب البيانات
     financial_data = get_real_financial_data(ticker)
@@ -511,33 +516,89 @@ def get_market_pulse():
 async def analyze_compare(
     ticker1: str, 
     ticker2: str, 
-    request: Request, # 👈 أضفنا هذا السطر للحصول على الـ IP
+    request: Request, 
     lang: str = "en", 
     db: Session = Depends(get_db), 
-    current_user: User = Depends(get_current_user_optional) # 👈 تم التغيير لـ optional للتعامل مع الزوار
+    current_user: User = Depends(get_current_user_optional)
 ):
-    # --- بداية كود الحماية الجديد عبر الـ IP والكريدت ---
+    # --- 🛡️ نظام الحماية المتطور (IP & Credits) ---
     if current_user:
-        # خصم 2 كريدت للمسجلين
         if current_user.credits < 2:
             raise HTTPException(status_code=402, detail="Insufficient credits. 2 credits required.")
     else:
-        # تتبع الزائر عبر الـ IP ومنحه محاولات محدودة
-        client_ip = request.client.host
+        # التقاط الـ IP الحقيقي للمستخدم خلف بروكسي Railway
+        x_forwarded_for = request.headers.get("x-forwarded-for")
+        if x_forwarded_for:
+            client_ip = x_forwarded_for.split(",")[0].strip()
+        else:
+            client_ip = request.client.host
+
         guest = db.query(GuestUsage).filter(GuestUsage.ip_address == client_ip).first()
         
         if not guest:
             guest = GuestUsage(ip_address=client_ip, attempts=0)
             db.add(guest)
         
-        # حظر الزائر إذا استهلك حد المحاولات (مثلاً 3 محاولات شاملة)
+        # منع الزائر بعد 3 محاولات شاملة للجهاز
         if guest.attempts >= 3:
             raise HTTPException(status_code=403, detail="Guest limit reached. Please register.")
         
         guest.attempts += 1
         db.commit()
-    # --- نهاية كود الحماية ---
+    # --- 🛡️ نهاية نظام الحماية ---
 
+    try:
+        # 2. جلب بيانات السهمين
+        data1 = get_real_financial_data(ticker1)
+        data2 = get_real_financial_data(ticker2)
+        
+        if not data1 or not data2:
+            raise HTTPException(status_code=404, detail="One or both stocks not found")
+
+        ai_payload1 = {k: v for k, v in data1.items() if k != 'chart_data'}
+        ai_payload2 = {k: v for k, v in data2.items() if k != 'chart_data'}
+
+        lang_map = {"en": "English", "ar": "Arabic", "it": "Italian"}
+        target_lang = lang_map.get(lang, "English")
+
+        # 3. أمر التحليل (البرومبت الخاص بك كما هو)
+        prompt = f"""
+        Act as a Senior Hedge Fund Strategy Director. Conduct a 'Capital Battle' between {ticker1} and {ticker2}.
+        
+        Financial Data {ticker1}: {json.dumps(ai_payload1)}
+        Financial Data {ticker2}: {json.dumps(ai_payload2)}
+        Language: {target_lang}
+
+        ⚠️ CRITICAL INSTRUCTIONS:
+        1. Write a massive institutional memo (min 600 words).
+        2. Directly compare their Valuations (P/E, PEG). Who is a better bargain?
+        3. Compare Profitability (ROE, Operating Margins). Who is more efficient?
+        4. Discuss 'Strategic Moat': Which business model is harder to destroy?
+        5. Use a professional, aggressive financial tone.
+        
+        Return strictly JSON with keys: 'verdict' (the long essay), 'winner', 'comparison_summary'.
+        """
+        
+        response = model.generate_content(prompt, generation_config={"response_mime_type": "application/json"})
+        analysis_result = json.loads(response.text)
+
+        # 4. خصم الكريدت وتحديث البيانات للمسجلين
+        credits_left = 0
+        if current_user:
+            current_user.credits -= 2
+            db.commit()
+            credits_left = current_user.credits
+
+        return {
+            "analysis": analysis_result,
+            "stock1": data1,
+            "stock2": data2,
+            "credits_left": credits_left
+        }
+    except Exception as e:
+        db.rollback()
+        print(f"Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
     try:
         # 2. جلب بيانات السهمين
         data1 = get_real_financial_data(ticker1)
