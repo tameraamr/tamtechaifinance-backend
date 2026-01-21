@@ -156,6 +156,32 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
 def read_users_me(current_user: User = Depends(get_current_user_mandatory)):
     return {"email": current_user.email, "credits": current_user.credits}
 
+
+# ... (Imports existing)
+
+# 👇👇👇 أضف هذا الـ Endpoint الجديد هنا 👇👇👇
+@app.get("/search-ticker/{query}")
+def search_ticker(query: str):
+    try:
+        url = f"https://query2.finance.yahoo.com/v1/finance/search?q={query}"
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        response = requests.get(url, headers=headers)
+        data = response.json()
+        
+        suggestions = []
+        if 'quotes' in data:
+            for item in data['quotes']:
+                if item.get('isYahooFinance', False): # تصفية النتائج
+                    suggestions.append({
+                        "symbol": item['symbol'],
+                        "name": item.get('longname') or item.get('shortname') or item['symbol']
+                    })
+        # نرجع أول 5 نتائج فقط
+        return suggestions[:5]
+    except Exception as e:
+        print(f"Search Error: {e}")
+        return []
+
 # 👇👇👇 نقطة الاتصال لاقتراح سهم ذكي 👇👇👇
 @app.get("/suggest-stock")
 def suggest_stock():
@@ -229,6 +255,29 @@ def get_real_financial_data(ticker: str):
     except Exception as e:
         print(f"YFinance Error: {e}")
         return None
+
+@app.get("/search-ticker/{ticker}")
+def search_ticker(ticker: str):
+    """جلب اقتراحات الأسهم الحقيقية من Yahoo Finance"""
+    try:
+        # نستخدم طلب البحث الرسمي من ياهو لضمان الدقة
+        url = f"https://query2.finance.yahoo.com/v1/finance/search?q={ticker}"
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        response = requests.get(url, headers=headers)
+        data = response.json()
+        
+        suggestions = []
+        for res in data.get('quotes', []):
+            # نأخذ الأسهم فقط (EQUITY) لضمان عدم ظهور عملات أو صناديق غير مرغوبة
+            if res.get('quoteType') == 'EQUITY': 
+                suggestions.append({
+                    "symbol": res.get('symbol'),
+                    "name": res.get('shortname') or res.get('longname')
+                })
+        return suggestions[:5] # نكتفي بـ 5 نتائج لتكون القائمة سريعة
+    except Exception as e:
+        print(f"Search Error: {e}")
+        return []
 
 @app.get("/analyze/{ticker}")
 async def analyze_stock(
