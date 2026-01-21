@@ -88,10 +88,11 @@ origins = [
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 👈 هذا السطر يسمح لأي دومين بالاتصال (مهم جداً الآن)
+    allow_origins=["*"], # يسمح لـ www.tamtech-finance.com وغيرها بالوصول
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"] # أضف هذا السطر لضمان رؤية المتصفح للرد
 )
 
 # --- Helpers ---
