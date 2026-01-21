@@ -277,12 +277,14 @@ async def analyze_stock(
         "chapter_3_valuation": "Headline: [Translate 'Valuation Check']. [Write 400+ words detailed essay]",
         
         "news_analysis": [
-            {{
-                "headline": "The news title (translated to {target_lang})",
-                "sentiment": "positive/negative/neutral",
-                "impact_score": 8
-            }}
-        ],
+    {{
+        "headline": "Title of the news",
+        "sentiment": "positive/negative/neutral",
+        "impact_score": 8,
+        "url": "direct link to the news",
+        "time": "e.g., 2 hours ago or Oct 24"
+    }}
+]
 
         "bull_case_points": ["Detailed point 1", "Detailed point 2", "Detailed point 3"],
         "bear_case_points": ["Detailed point 1", "Detailed point 2", "Detailed point 3"],
