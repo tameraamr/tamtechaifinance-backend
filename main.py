@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, status
+from fastapi import FastAPI, HTTPException, Depends, status, Request 
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel, EmailStr, Field, field_validator
@@ -9,7 +9,7 @@ import os
 import json
 import requests
 from dotenv import load_dotenv
-from sqlalchemy import create_engine, Column, Integer, String
+from sqlalchemy import create_engine, Column, Integer, String, DateTime
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from datetime import datetime, timedelta
@@ -57,6 +57,13 @@ class User(Base):
     address = Column(String, nullable=True) # اختياري
     
     credits = Column(Integer, default=0) 
+
+# هذا الجدول يسجل IP الزائر وكم مرة استخدم الموقع
+class GuestUsage(Base):
+    __tablename__ = "guest_usage"
+    ip_address = Column(String, primary_key=True, index=True)
+    attempts = Column(Integer, default=0)
+    last_attempt = Column(DateTime, default=datetime.utcnow)
 
 # إنشاء الجداول تلقائياً
 Base.metadata.create_all(bind=engine)
@@ -310,16 +317,33 @@ def search_ticker(ticker: str):
 @app.get("/analyze/{ticker}")
 async def analyze_stock(
     ticker: str, 
+    request: Request, # 👈 أضفنا "request" هنا للحصول على IP الزائر
     lang: str = "en", 
     db: Session = Depends(get_db), 
     current_user: User = Depends(get_current_user_optional)
 ):
+    # --- بداية كود الحماية الجديد ---
     if current_user:
         if current_user.credits <= 0: raise HTTPException(status_code=402, detail="No credits left")
         if ticker == "#DEVMODE":
             current_user.credits = 1000
             db.commit()
             return {"message": "Dev Mode: 1000 Credits Added"}
+    else:
+        # تتبع الزائر عبر الـ IP
+        client_ip = request.client.host
+        guest = db.query(GuestUsage).filter(GuestUsage.ip_address == client_ip).first()
+        
+        if not guest:
+            guest = GuestUsage(ip_address=client_ip, attempts=0)
+            db.add(guest)
+        
+        if guest.attempts >= 3: # 👈 المنع بعد 3 محاولات للزائر
+            raise HTTPException(status_code=403, detail="Guest limit reached. Please register.")
+        
+        guest.attempts += 1
+        db.commit()
+    # --- نهاية كود الحماية الجديد ---
     
     # 1. جلب البيانات
     financial_data = get_real_financial_data(ticker)
@@ -487,13 +511,32 @@ def get_market_pulse():
 async def analyze_compare(
     ticker1: str, 
     ticker2: str, 
+    request: Request, # 👈 أضفنا هذا السطر للحصول على الـ IP
     lang: str = "en", 
     db: Session = Depends(get_db), 
-    current_user: User = Depends(get_current_user_mandatory)
+    current_user: User = Depends(get_current_user_optional) # 👈 تم التغيير لـ optional للتعامل مع الزوار
 ):
-    # 1. التحقق من الرصيد (خصم 2 كريدت)
-    if current_user.credits < 2:
-        raise HTTPException(status_code=402, detail="Insufficient credits. 2 credits required.")
+    # --- بداية كود الحماية الجديد عبر الـ IP والكريدت ---
+    if current_user:
+        # خصم 2 كريدت للمسجلين
+        if current_user.credits < 2:
+            raise HTTPException(status_code=402, detail="Insufficient credits. 2 credits required.")
+    else:
+        # تتبع الزائر عبر الـ IP ومنحه محاولات محدودة
+        client_ip = request.client.host
+        guest = db.query(GuestUsage).filter(GuestUsage.ip_address == client_ip).first()
+        
+        if not guest:
+            guest = GuestUsage(ip_address=client_ip, attempts=0)
+            db.add(guest)
+        
+        # حظر الزائر إذا استهلك حد المحاولات (مثلاً 3 محاولات شاملة)
+        if guest.attempts >= 3:
+            raise HTTPException(status_code=403, detail="Guest limit reached. Please register.")
+        
+        guest.attempts += 1
+        db.commit()
+    # --- نهاية كود الحماية ---
 
     try:
         # 2. جلب بيانات السهمين
