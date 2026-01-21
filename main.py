@@ -244,8 +244,12 @@ async def analyze_stock(
             db.commit()
             return {"message": "Dev Mode: 1000 Credits Added"}
     
+    # 1. جلب البيانات
     financial_data = get_real_financial_data(ticker)
-    if not financial_data: raise HTTPException(status_code=404, detail="Stock not found.")
+    
+    # 👇 التعديل هنا: إذا لم نجد بيانات، أو وجدنا بيانات لكن بدون سعر (سهم وهمي) -> وقف فوراً
+    if not financial_data or not financial_data.get('price'):
+        raise HTTPException(status_code=404, detail=f"Stock '{ticker}' not found or delisted.")
     
     ai_payload = {k: v for k, v in financial_data.items() if k != 'chart_data'}
     
