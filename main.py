@@ -256,49 +256,47 @@ async def analyze_stock(
     }
     target_lang = lang_map.get(lang, "English")
 
+    # 👇 الـ Prompt المحدث - دسم جداً ويطلب تحليل الأخبار
     prompt = f"""
     You are the Chief Investment Officer (CIO) at a prestigious Global Hedge Fund. 
     Your task is to produce an **EXHAUSTIVE, INSTITUTIONAL-GRADE INVESTMENT MEMO** for {ticker}.
     
-    **Financial Data:** {json.dumps(ai_payload)}
+    **Financial Data & News:** {json.dumps(ai_payload)}
     **Language:** Write strictly in {target_lang}.
 
-    **⚠️ CRITICAL INSTRUCTIONS - READ CAREFULLY:**
-    1.  **EXTREME DEPTH:** Do NOT act like a chatbot. Act like a Equity Research Analyst writing a paid report. Each text section must be LONG, DETAILED, and ANALYTICAL (aim for 300-500 words per chapter).
-    2.  **NO FLUFF:** Don't explain what "P/E" means. Use the metrics to draw conclusions. Connect the dots between Macroeconomics, Industry Trends, and Company Specifics.
-    3.  **CONSISTENCY:** Base your verdict STRICTLY on the provided data (Valuation, Growth, Health). Do not hallucinate. If the stock is overvalued, say SELL/HOLD. If undervalued, say BUY.
+    **⚠️ CRITICAL INSTRUCTIONS:**
+    1.  **EXTREME DEPTH:** Each text section must be LONG, DETAILED, and ANALYTICAL (aim for 400-600 words per chapter).
+    2.  **SENTIMENT ANALYSIS:** Analyze the provided 'recent_news'. For each major news item, determine if it's Positive, Negative, or Neutral and assign an Impact Score (1-10).
+    3.  **NO FLUFF:** Use professional financial terminology. Connect the news to the valuation.
     4.  **FORMAT:** Return strictly the JSON structure below.
 
     **REQUIRED JSON OUTPUT:**
     {{
-        "chapter_1_the_business": "Headline: [Translate 'The Business DNA']. Write a comprehensive 'Deep Dive' essay (approx 400 words). Analyze the business model's durability, the 'Economic Moat' (Network Effects, Switching Costs, Cost Advantage), and the competitive landscape. Discuss Unit Economics and supply chain resilience.",
+        "chapter_1_the_business": "Headline: [Translate 'The Business DNA']. [Write 400+ words detailed essay]",
+        "chapter_2_financials": "Headline: [Translate 'Financial Health']. [Write 400+ words detailed essay]",
+        "chapter_3_valuation": "Headline: [Translate 'Valuation Check']. [Write 400+ words detailed essay]",
         
-        "chapter_2_financials": "Headline: [Translate 'Financial Health']. Write a forensic financial analysis essay (approx 400 words). Discuss Capital Allocation (ROIC vs WACC), Operating Leverage, Free Cash Flow (FCF) conversion, and Balance Sheet strength. Analyze the quality of earnings (organic vs inorganic growth).",
-        
-        "chapter_3_valuation": "Headline: [Translate 'Valuation Check']. Write a detailed valuation essay (approx 400 words). Perform a mental DCF (Discounted Cash Flow) analysis. Compare current multiples (P/E, PEG, EV/EBITDA) to historical averages and peer groups. Is the stock priced for perfection? What is the Margin of Safety?",
-        
-        "bull_case_points": [
-            "Extremely detailed, specific bull argument #1 (e.g., specific product launch impact).",
-            "Extremely detailed, specific bull argument #2 (e.g., margin expansion catalyst).",
-            "Extremely detailed, specific bull argument #3."
+        "news_analysis": [
+            {{
+                "headline": "The news title (translated to {target_lang})",
+                "sentiment": "positive/negative/neutral",
+                "impact_score": 8
+            }}
         ],
-        
-        "bear_case_points": [
-            "Extremely detailed, specific bear argument #1 (e.g., specific regulatory threat).",
-            "Extremely detailed, specific bear argument #2 (e.g., valuation compression risk).",
-            "Extremely detailed, specific bear argument #3."
-        ],
+
+        "bull_case_points": ["Detailed point 1", "Detailed point 2", "Detailed point 3"],
+        "bear_case_points": ["Detailed point 1", "Detailed point 2", "Detailed point 3"],
         
         "forecasts": {{
-            "next_1_year": "A detailed 12-month scenario analysis. Discuss short-term catalysts, earnings revisions, and sentiment shifts.",
-            "next_5_years": "A long-term structural thesis (2030 outlook). Discuss TAM (Total Addressable Market) expansion, secular trends, and terminal value."
+            "next_1_year": "Detailed 12-month scenario analysis",
+            "next_5_years": "Detailed 2030 outlook"
         }},
         
         "swot_analysis": {{
-            "strengths": ["Detailed Strength 1", "Detailed Strength 2", "Detailed Strength 3"],
-            "weaknesses": ["Detailed Weakness 1", "Detailed Weakness 2", "Detailed Weakness 3"],
-            "opportunities": ["Detailed Opportunity 1", "Detailed Opportunity 2", "Detailed Opportunity 3"],
-            "threats": ["Detailed Threat 1", "Detailed Threat 2", "Detailed Threat 3"]
+            "strengths": ["S1", "S2", "S3"],
+            "weaknesses": ["W1", "W2", "W3"],
+            "opportunities": ["O1", "O2", "O3"],
+            "threats": ["T1", "T2", "T3"]
         }},
         
         "radar_scores": [
@@ -309,24 +307,29 @@ async def analyze_stock(
             {{ "subject": "Momentum", "A": 8 }}
         ],
         
-        "verdict": "BUY / HOLD / SELL / STRONG BUY", 
+        "verdict": "BUY / HOLD / SELL", 
         "confidence_score": 85, 
-        "summary_one_line": "A decisive, executive summary of the final investment recommendation."
+        "summary_one_line": "Executive summary"
     }}
     """
     
     try:
+        # استخدام الموديل لإنتاج الرد
         response = model.generate_content(prompt, generation_config={"response_mime_type": "application/json"})
+        
         credits_left = 0
         if current_user:
             current_user.credits -= 1
             db.commit()
             credits_left = current_user.credits
 
+        # تحليل الرد والتأكد من تحويله لـ JSON
+        analysis_json = json.loads(response.text)
+
         return {
             "ticker": ticker.upper(), 
             "data": financial_data, 
-            "analysis": json.loads(response.text), 
+            "analysis": analysis_json, 
             "credits_left": credits_left,
             "is_guest": current_user is None
         }
