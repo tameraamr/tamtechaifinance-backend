@@ -689,3 +689,34 @@ async def analyze_compare(
         db.rollback()
         print(f"Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/market-sentiment")
+async def get_market_sentiment():
+    try:
+        # جلب بيانات المؤشرات العالمية
+        spy = yf.Ticker("SPY").history(period="2d")
+        vix = yf.Ticker("^VIX").history(period="2d")
+        
+        # حساب نسبة التغير في السوق
+        market_change = ((spy['Close'].iloc[-1] - spy['Close'].iloc[-2]) / spy['Close'].iloc[-2]) * 100
+        vix_current = vix['Close'].iloc[-1]
+        
+        # حساب النتيجة (Score) من 100
+        score = 50
+        score += (market_change * 10)
+        
+        if vix_current > 30: score -= 30    # خوف شديد
+        elif vix_current > 22: score -= 15   # قلق
+        elif vix_current < 16: score += 15   # طمع/هدوء
+        
+        score = max(5, min(95, int(score))) # لضمان بقاء الرقم منطقياً
+        
+        status = "Neutral"
+        if score > 65: status = "Greed"
+        elif score < 35: status = "Fear"
+        
+        return {"sentiment": status, "score": score}
+    except Exception as e:
+        print(f"Error: {e}")
+        return {"sentiment": "Neutral", "score": 50}
