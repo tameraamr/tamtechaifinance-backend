@@ -7,6 +7,7 @@ import google.generativeai as genai
 import yfinance as yf
 import os
 import json
+import random
 import requests
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, func
@@ -694,56 +695,64 @@ async def analyze_compare(
 @app.get("/market-sentiment")
 async def get_market_sentiment():
     try:
-        # جلب البيانات الأساسية
-        spy = yf.Ticker("SPY").history(period="150d")  # للزخم طويل الأمد
-        vix = yf.Ticker("^VIX").history(period="5d")    # للخوف اللحظي
-        bonds = yf.Ticker("TLT").history(period="20d")  # لطلب الملاذ الآمن
+        # جلب البيانات مع فحص وجودها
+        spy_ticker = yf.Ticker("SPY").history(period="150d")
+        if spy_ticker.empty:
+            return {"sentiment": "Neutral", "score": 50}
+            
+        ma125 = spy_ticker['Close'].rolling(window=125).mean().iloc[-1]
+        current_spy = spy_ticker['Close'].iloc[-1]
         
-        # 1. حساب الزخم (Momentum): السعر الحالي vs المتوسط المتحرك 125 يوم
-        ma125 = spy['Close'].rolling(window=125).mean().iloc[-1]
-        current_spy = spy['Close'].iloc[-1]
+        # حساب الزخم ببساطة لضمان عدم حدوث خطأ رياضي
         momentum_score = 50 + ((current_spy - ma125) / ma125 * 100) * 4
-
-        # 2. حساب الخوف (VIX): مقارنة الـ VIX الحالي بمتوسطه التاريخي (20 هو نقطة التعادل)
-        current_vix = vix['Close'].iloc[-1]
-        vix_score = 100 - (current_vix * 2.5) # معادلة تحويل VIX لنقاط
-
-        # 3. حساب الطلب على الملاذ الآمن (Safe Haven): أداء الأسهم مقابل السندات في آخر 20 يوم
-        spy_ret = (spy['Close'].iloc[-1] - spy['Close'].iloc[-20]) / spy['Close'].iloc[-20]
-        bond_ret = (bonds['Close'].iloc[-1] - bonds['Close'].iloc[-20]) / bonds['Close'].iloc[-20]
-        safe_haven_score = 50 + (spy_ret - bond_ret) * 100
-
-        # 4. التجميع النهائي (أوزان احترافية)
-        # الـ VIX (35%)، الزخم (35%)، الملاذ الآمن (30%)
-        total_score = (vix_score * 0.35) + (momentum_score * 0.35) + (safe_haven_score * 0.30)
+        final_score = max(5, min(95, int(momentum_score)))
         
-        # "تنعيم" الرقم النهائي ليكون متسقاً مع المواقع الكبرى
-        final_score = max(5, min(95, int(total_score)))
-        
-        status = "Neutral"
-        if final_score > 75: status = "Extreme Greed"
-        elif final_score > 55: status = "Greed"
-        elif final_score < 25: status = "Extreme Fear"
-        elif final_score < 45: status = "Fear"
-        
-        return {"sentiment": status, "score": final_score}
+        return {
+            "sentiment": "Greed" if final_score > 55 else "Fear" if final_score < 45 else "Neutral",
+            "score": final_score
+        }
     except Exception as e:
-        print(f"Error calculating sentiment: {e}")
+        print(f"Sentiment Error: {e}")
         return {"sentiment": "Neutral", "score": 50}
 
 
 @app.get("/market-sectors")
 async def get_market_sectors():
     try:
-        # رموز الصناديق التي تمثل قطاعات التكنولوجيا، الطاقة، والمالية
-        sectors = {"Tech": "XLK", "Energy": "XLE", "Finance": "XLF"}
+        # رموز الصناديق التي تمثل أهم القطاعات
+        sector_tickers = {
+            "Technology": "XLK",
+            "Energy": "XLE",
+            "Financials": "XLF"
+        }
         results = []
-        for name, ticker in sectors.items():
-            stock = yf.Ticker(ticker)
-            hist = stock.history(period="2d")
-            if len(hist) >= 2:
-                change = ((hist['Close'].iloc[-1] - hist['Close'].iloc[-2]) / hist['Close'].iloc[-2]) * 100
-                results.append({"name": name, "change": f"{change:+.2f}%", "positive": change > 0})
+        
+        for name, sym in sector_tickers.items():
+            try:
+                stock = yf.Ticker(sym)
+                # نطلب بيانات يومين فقط لتقليل الضغط
+                hist = stock.history(period="2d")
+                
+                # التأكد من وجود بيانات كافية للحساب
+                if hist is not None and not hist.empty and len(hist) >= 2:
+                    current_price = hist['Close'].iloc[-1]
+                    prev_price = hist['Close'].iloc[-2]
+                    
+                    if prev_price != 0:
+                        change = ((current_price - prev_price) / prev_price) * 100
+                        results.append({
+                            "name": name,
+                            "change": f"{change:+.2f}%",
+                            "positive": bool(change > 0)
+                        })
+                else:
+                    # في حال لم تتوفر بيانات ياهو، نضع قيمة افتراضية بدل الانهيار
+                    results.append({"name": name, "change": "0.00%", "positive": True})
+            except Exception as e:
+                print(f"Error fetching {name}: {e}")
+                continue
+        
         return results
-    except:
+    except Exception as e:
+        print(f"Global Sectors Error: {e}")
         return []
