@@ -730,3 +730,20 @@ async def get_market_sentiment():
     except Exception as e:
         print(f"Error calculating sentiment: {e}")
         return {"sentiment": "Neutral", "score": 50}
+
+
+@app.get("/market-sectors")
+async def get_market_sectors():
+    try:
+        # رموز الصناديق التي تمثل قطاعات التكنولوجيا، الطاقة، والمالية
+        sectors = {"Tech": "XLK", "Energy": "XLE", "Finance": "XLF"}
+        results = []
+        for name, ticker in sectors.items():
+            stock = yf.Ticker(ticker)
+            hist = stock.history(period="2d")
+            if len(hist) >= 2:
+                change = ((hist['Close'].iloc[-1] - hist['Close'].iloc[-2]) / hist['Close'].iloc[-2]) * 100
+                results.append({"name": name, "change": f"{change:+.2f}%", "positive": change > 0})
+        return results
+    except:
+        return []
