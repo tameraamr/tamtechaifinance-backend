@@ -694,29 +694,39 @@ async def analyze_compare(
 @app.get("/market-sentiment")
 async def get_market_sentiment():
     try:
-        # جلب بيانات المؤشرات العالمية
-        spy = yf.Ticker("SPY").history(period="2d")
-        vix = yf.Ticker("^VIX").history(period="2d")
+        # جلب البيانات الأساسية
+        spy = yf.Ticker("SPY").history(period="150d")  # للزخم طويل الأمد
+        vix = yf.Ticker("^VIX").history(period="5d")    # للخوف اللحظي
+        bonds = yf.Ticker("TLT").history(period="20d")  # لطلب الملاذ الآمن
         
-        # حساب نسبة التغير في السوق
-        market_change = ((spy['Close'].iloc[-1] - spy['Close'].iloc[-2]) / spy['Close'].iloc[-2]) * 100
-        vix_current = vix['Close'].iloc[-1]
+        # 1. حساب الزخم (Momentum): السعر الحالي vs المتوسط المتحرك 125 يوم
+        ma125 = spy['Close'].rolling(window=125).mean().iloc[-1]
+        current_spy = spy['Close'].iloc[-1]
+        momentum_score = 50 + ((current_spy - ma125) / ma125 * 100) * 4
+
+        # 2. حساب الخوف (VIX): مقارنة الـ VIX الحالي بمتوسطه التاريخي (20 هو نقطة التعادل)
+        current_vix = vix['Close'].iloc[-1]
+        vix_score = 100 - (current_vix * 2.5) # معادلة تحويل VIX لنقاط
+
+        # 3. حساب الطلب على الملاذ الآمن (Safe Haven): أداء الأسهم مقابل السندات في آخر 20 يوم
+        spy_ret = (spy['Close'].iloc[-1] - spy['Close'].iloc[-20]) / spy['Close'].iloc[-20]
+        bond_ret = (bonds['Close'].iloc[-1] - bonds['Close'].iloc[-20]) / bonds['Close'].iloc[-20]
+        safe_haven_score = 50 + (spy_ret - bond_ret) * 100
+
+        # 4. التجميع النهائي (أوزان احترافية)
+        # الـ VIX (35%)، الزخم (35%)، الملاذ الآمن (30%)
+        total_score = (vix_score * 0.35) + (momentum_score * 0.35) + (safe_haven_score * 0.30)
         
-        # حساب النتيجة (Score) من 100
-        score = 50
-        score += (market_change * 10)
-        
-        if vix_current > 30: score -= 30    # خوف شديد
-        elif vix_current > 22: score -= 15   # قلق
-        elif vix_current < 16: score += 15   # طمع/هدوء
-        
-        score = max(5, min(95, int(score))) # لضمان بقاء الرقم منطقياً
+        # "تنعيم" الرقم النهائي ليكون متسقاً مع المواقع الكبرى
+        final_score = max(5, min(95, int(total_score)))
         
         status = "Neutral"
-        if score > 65: status = "Greed"
-        elif score < 35: status = "Fear"
+        if final_score > 75: status = "Extreme Greed"
+        elif final_score > 55: status = "Greed"
+        elif final_score < 25: status = "Extreme Fear"
+        elif final_score < 45: status = "Fear"
         
-        return {"sentiment": status, "score": score}
+        return {"sentiment": status, "score": final_score}
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Error calculating sentiment: {e}")
         return {"sentiment": "Neutral", "score": 50}
