@@ -161,9 +161,21 @@ class UserCreate(BaseModel):
         if not any(char.isdigit() for char in v): raise ValueError('Password must contain a number')
         return v
 
+# 👇 ننشئ نموذجاً لبيانات المستخدم لترتيب الرد
+class UserDataSchema(BaseModel):
+    email: str
+    first_name: str | None = None
+    last_name: str | None = None
+    phone_number: str | None = None
+    country: str | None = None
+    address: str | None = None
+
+# 👇 نحدث الـ Token ليشمل البيانات والرصيد
 class Token(BaseModel):
     access_token: str
     token_type: str
+    user: UserDataSchema
+    credits: int
 
 class LicenseRequest(BaseModel):
     license_key: str
@@ -192,10 +204,28 @@ def register(user: UserCreate, db: Session = Depends(get_db)):
 
 @app.post("/token", response_model=Token)
 def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    # 1. التحقق من المستخدم
     user = db.query(User).filter(User.email == form_data.username).first()
     if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Incorrect email or password")
-    return {"access_token": create_access_token(data={"sub": user.email}), "token_type": "bearer"}
+    
+    # 2. إنشاء التوكين
+    access_token = create_access_token(data={"sub": user.email})
+    
+    # 3. 👇 التغيير الكبير: إرجاع البيانات كاملة
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "credits": user.credits, # ✅ الرصيد وصل!
+        "user": {
+            "email": user.email,
+            "first_name": user.first_name,
+            "last_name": user.last_name,
+            "phone_number": user.phone_number,
+            "country": user.country,
+            "address": user.address
+        }
+    }
 
 @app.get("/users/me")
 def read_users_me(current_user: User = Depends(get_current_user_mandatory)):
