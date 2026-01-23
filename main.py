@@ -784,6 +784,7 @@ async def get_market_sectors():
             "Utilities": "XLU",
             "Communication": "XLC",
             "Consumer Staples": "XLP"
+            "S&P 500 Index": "SPY"
         }
         results = []
         
