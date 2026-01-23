@@ -725,20 +725,42 @@ async def analyze_compare(
 @app.get("/market-sentiment")
 async def get_market_sentiment():
     try:
-        # جلب البيانات مع فحص وجودها
-        spy_ticker = yf.Ticker("SPY").history(period="150d")
+        # جلب بيانات 30 يوم للحسابات السريعة
+        spy_ticker = yf.Ticker("SPY").history(period="30d")
         if spy_ticker.empty:
             return {"sentiment": "Neutral", "score": 50}
             
-        ma125 = spy_ticker['Close'].rolling(window=125).mean().iloc[-1]
+        # 1. حساب الزخم القصير (Current Price vs 20-day Average)
+        ma20 = spy_ticker['Close'].rolling(window=20).mean().iloc[-1]
         current_spy = spy_ticker['Close'].iloc[-1]
         
-        # حساب الزخم ببساطة لضمان عدم حدوث خطأ رياضي
-        momentum_score = 50 + ((current_spy - ma125) / ma125 * 100) * 4
-        final_score = max(5, min(95, int(momentum_score)))
+        # 2. حساب الـ RSI المبسط (قوة الشراء والبيع)
+        delta = spy_ticker['Close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean().iloc[-1]
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean().iloc[-1]
+        
+        if loss == 0:
+            rsi = 100
+        else:
+            rs = gain / loss
+            rsi = 100 - (100 / (1 + rs))
+
+        # دمج الـ RSI مع الزخم ليعطي نتيجة واقعية
+        # إذا الـ RSI عالي جداً (فوق 70) السوق في طمع (Greed)
+        momentum_impact = ((current_spy - ma20) / ma20 * 100) * 10 # تكبير التأثير ليتحرك السكور
+        final_score = (rsi * 0.7) + (momentum_impact * 0.3) + 20 
+        
+        # ضمان أن السكور بين 5 و 95
+        final_score = max(5, min(95, int(final_score)))
+        
+        sentiment_label = "Neutral"
+        if final_score > 70: sentiment_label = "Extreme Greed"
+        elif final_score > 55: sentiment_label = "Greed"
+        elif final_score < 30: sentiment_label = "Extreme Fear"
+        elif final_score < 45: sentiment_label = "Fear"
         
         return {
-            "sentiment": "Greed" if final_score > 55 else "Fear" if final_score < 45 else "Neutral",
+            "sentiment": sentiment_label,
             "score": final_score
         }
     except Exception as e:
@@ -749,21 +771,27 @@ async def get_market_sentiment():
 @app.get("/market-sectors")
 async def get_market_sectors():
     try:
-        # رموز الصناديق التي تمثل أهم القطاعات
+        # رموز الصناديق التي تمثل كامل قطاعات السوق الأمريكي (11 قطاعاً)
         sector_tickers = {
             "Technology": "XLK",
             "Energy": "XLE",
-            "Financials": "XLF"
+            "Financials": "XLF",
+            "Healthcare": "XLV",
+            "Consumer Disc": "XLY",
+            "Industrials": "XLI",
+            "Materials": "XLB",
+            "Real Estate": "XLRE",
+            "Utilities": "XLU",
+            "Communication": "XLC",
+            "Consumer Staples": "XLP"
         }
         results = []
         
         for name, sym in sector_tickers.items():
             try:
                 stock = yf.Ticker(sym)
-                # نطلب بيانات يومين فقط لتقليل الضغط
                 hist = stock.history(period="2d")
                 
-                # التأكد من وجود بيانات كافية للحساب
                 if hist is not None and not hist.empty and len(hist) >= 2:
                     current_price = hist['Close'].iloc[-1]
                     prev_price = hist['Close'].iloc[-2]
@@ -776,7 +804,6 @@ async def get_market_sectors():
                             "positive": bool(change > 0)
                         })
                 else:
-                    # في حال لم تتوفر بيانات ياهو، نضع قيمة افتراضية بدل الانهيار
                     results.append({"name": name, "change": "0.00%", "positive": True})
             except Exception as e:
                 print(f"Error fetching {name}: {e}")
