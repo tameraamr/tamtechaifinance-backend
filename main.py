@@ -783,8 +783,8 @@ async def get_market_sectors():
             "Real Estate": "XLRE",
             "Utilities": "XLU",
             "Communication": "XLC",
-            "Consumer Staples": "XLP"
-            "S&P 500 Index": "SPY"
+            "Consumer Staples": "XLP",
+            "S&P 500 Index": "SPY",
         }
         results = []
         
