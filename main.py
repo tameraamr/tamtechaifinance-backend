@@ -695,7 +695,14 @@ async def analyze_compare(
         ai_payload1 = {k: v for k, v in data1.items() if k != 'chart_data'}
         ai_payload2 = {k: v for k, v in data2.items() if k != 'chart_data'}
 
-        lang_map = {"en": "English", "ar": "Arabic", "it": "Italian"}
+        lang_map = {
+            "en": "English", 
+            "ar": "Arabic (Modern Standard, High-End Financial Tone)", 
+            "es": "Spanish (Professional Financial Tone)",
+            "he": "Hebrew (Professional Financial Tone)",
+            "ru": "Russian (Professional Financial Tone)",
+            "it": "Italian (Professional Financial Tone)"
+        }
         target_lang = lang_map.get(lang, "English")
 
         # 3. أمر التحليل (البرومبت الخاص بك كما هو)
@@ -754,7 +761,14 @@ async def analyze_compare(
         ai_payload1 = {k: v for k, v in data1.items() if k != 'chart_data'}
         ai_payload2 = {k: v for k, v in data2.items() if k != 'chart_data'}
 
-        lang_map = {"en": "English", "ar": "Arabic", "it": "Italian"}
+        lang_map = {
+            "en": "English", 
+            "ar": "Arabic (Modern Standard, High-End Financial Tone)", 
+            "es": "Spanish (Professional Financial Tone)",
+            "he": "Hebrew (Professional Financial Tone)",
+            "ru": "Russian (Professional Financial Tone)",
+            "it": "Italian (Professional Financial Tone)"
+        }
         target_lang = lang_map.get(lang, "English")
 
         # 3. أمر التحليل والمقارنة
