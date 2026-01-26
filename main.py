@@ -93,6 +93,66 @@ try:
 except:
     model = genai.GenerativeModel('gemini-1.5-pro')
 
+# 🎯 HARD-CODED TICKER POOL - 180+ DIVERSE STOCKS
+# NO SMCI, NO PLTR - Removed to prove true randomness
+# Pure Python random.choice() - NO AI, NO TRENDING APIs
+TICKER_POOL = [
+    # Technology (40 stocks)
+    "AAPL", "MSFT", "NVDA", "AVGO", "ORCL", "ADBE", "CRM", "CSCO", "ACN", "AMD",
+    "INTC", "IBM", "TXN", "QCOM", "NOW", "AMAT", "MU", "LRCX", "KLAC", "SNPS",
+    "CDNS", "ADSK", "ROP", "FTNT", "ANSS", "TYL", "PTC", "ZBRA", "KEYS", "GDDY",
+    "INTU", "PANW", "WDAY", "TEAM", "DDOG", "SNOW", "NET", "ZS", "OKTA", "CRWD",
+    
+    # Healthcare (35 stocks)
+    "LLY", "UNH", "JNJ", "ABBV", "MRK", "TMO", "ABT", "DHR", "PFE", "BMY",
+    "AMGN", "GILD", "CVS", "CI", "MDT", "ISRG", "REGN", "VRTX", "HUM", "BSX",
+    "ELV", "ZTS", "SYK", "BDX", "EW", "IDXX", "RMD", "MTD", "DXCM", "A",
+    "ALGN", "HOLX", "PODD", "IQV", "CRL",
+    
+    # Finance (35 stocks)
+    "BRK.B", "JPM", "V", "MA", "BAC", "WFC", "GS", "MS", "SPGI", "BLK",
+    "C", "AXP", "SCHW", "PGR", "CB", "MMC", "PNC", "USB", "TFC", "COF",
+    "AON", "ICE", "CME", "MCO", "AJG", "TRV", "AFL", "ALL", "MET", "AIG",
+    "FIS", "FISV", "BK", "STT", "TROW",
+    
+    # Consumer Discretionary (30 stocks)
+    "AMZN", "TSLA", "HD", "MCD", "NKE", "SBUX", "LOW", "TJX", "BKNG", "CMG",
+    "MAR", "ORLY", "AZO", "GM", "F", "ROST", "YUM", "DG", "DLTR", "EBAY",
+    "POOL", "ULTA", "DPZ", "BBY", "DECK", "LVS", "MGM", "WYNN", "GRMN", "GPC",
+    
+    # Energy (25 stocks)
+    "XOM", "CVX", "COP", "SLB", "EOG", "MPC", "PSX", "VLO", "OXY", "WMB",
+    "KMI", "HES", "HAL", "DVN", "BKR", "FANG", "MRO", "APA", "EQT", "CTRA",
+    "OKE", "LNG", "TRGP", "EPD", "ET",
+    
+    # Industrials (30 stocks)
+    "CAT", "RTX", "UNP", "HON", "BA", "UPS", "LMT", "GE", "DE", "MMM",
+    "ETN", "PH", "EMR", "ITW", "CSX", "NSC", "FDX", "WM", "CMI", "PCAR",
+    "ROK", "CARR", "OTIS", "GWW", "FAST", "PAYX", "VRSK", "IEX", "DOV", "XYL",
+    
+    # Materials (15 stocks)
+    "LIN", "APD", "ECL", "SHW", "FCX", "NEM", "CTVA", "DD", "NUE", "DOW",
+    "ALB", "VMC", "MLM", "PPG", "CF",
+    
+    # Real Estate (15 stocks)
+    "PLD", "AMT", "EQIX", "PSA", "WELL", "DLR", "O", "SPG", "VICI", "AVB",
+    "EQR", "SBAC", "VTR", "EXR", "INVH",
+    
+    # Utilities (15 stocks)
+    "NEE", "DUK", "SO", "D", "AEP", "EXC", "SRE", "XEL", "WEC", "ED",
+    "ES", "AWK", "DTE", "PPL", "AEE",
+    
+    # Communications (15 stocks)
+    "META", "GOOGL", "GOOG", "NFLX", "DIS", "CMCSA", "T", "VZ", "TMUS", "CHTR",
+    "EA", "TTWO", "MTCH", "PARA", "WBD",
+    
+    # Consumer Staples (15 stocks)
+    "WMT", "PG", "KO", "PEP", "COST", "PM", "MO", "CL", "MDLZ", "KMB",
+    "GIS", "K", "HSY", "CAG", "SJM"
+]
+
+print(f"✅ Ticker Pool Loaded: {len(TICKER_POOL)} stocks (NO SMCI, NO PLTR)")
+
 app = FastAPI()
 
 # 👇 أضف هذا القسم المحدث هنا بالضبط للسماح بالدومين الجديد
@@ -257,29 +317,38 @@ def search_ticker(query: str):
         print(f"Search Error: {e}")
         return []
 
-# 👇👇👇 نقطة الاتصال لاقتراح سهم ذكي 👇👇👇
+# 🎯🎯🎯 NEW RANDOM TICKER ENDPOINT V2 - GUARANTEED FRESH 🎯🎯🎯
+@app.get("/get-random-ticker-v2")
+def get_random_ticker_v2():
+    """
+    BRAND NEW ENDPOINT - Forces Railway to use new code.
+    Pure random.choice() from 230+ stock pool.
+    NO SMCI. NO PLTR. NO AI. NO CACHE.
+    """
+    try:
+        ticker = random.choice(TICKER_POOL)
+        print(f"🎲 V2 Random Pick: {ticker} from pool of {len(TICKER_POOL)}")
+        
+        return {
+            "ticker": ticker,
+            "timestamp": datetime.utcnow().isoformat(),
+            "pool_size": len(TICKER_POOL),
+            "version": "v2"
+        }
+    except Exception as e:
+        print(f"❌ V2 Error: {e}")
+        return {
+            "ticker": random.choice(["AAPL", "MSFT", "GOOGL", "JPM", "XOM", "JNJ", "WMT", "PG"]),
+            "timestamp": datetime.utcnow().isoformat(),
+            "pool_size": 8,
+            "version": "v2-fallback"
+        }
+
+# ⚠️⚠️ OLD ENDPOINT - KEEP FOR BACKWARD COMPATIBILITY BUT REDIRECT TO V2 ⚠️⚠️
 @app.get("/suggest-stock")
 def suggest_stock():
-    """Asks the AI to pick a high-potential stock dynamically with a temperature boost for variety."""
-    try:
-        # أضفنا طلب التنوع (randomly pick) وتعديل الـ Temperature لزيادة العشوائية
-        prompt = "Act as a senior financial analyst. Pick ONE high-potential stock ticker from the US market (NYSE/NASDAQ) that is trending or has a strong growth catalyst. Return ONLY the ticker symbol (e.g. TSLA). Do not repeat NVDA every time, try to be diverse. Return ONLY the symbol."
-        
-        # استخدام الـ Generation Config لزيادة العشوائية (Temperature)
-        response = model.generate_content(
-            prompt,
-            generation_config=genai.types.GenerationConfig(
-                temperature=0.9, # كلما زاد الرقم زاد التنوع (بين 0 و 1)
-            )
-        )
-        ticker = response.text.strip().replace("\n", "").replace(" ", "").upper()
-        clean_ticker = re.sub(r'[^A-Z]', '', ticker)
-        return {"ticker": clean_ticker}
-    except:
-        # قائمة احتياطية في حال فشل الـ AI عشان ما يعطي دايماً NVDA
-        import random
-        backups = ["MSFT", "AAPL", "AMD", "META", "GOOGL", "AMZN", "PYPL", "V"]
-        return {"ticker": random.choice(backups)}
+    """OLD ENDPOINT - Redirects to V2 for backward compatibility"""
+    return get_random_ticker_v2()
 
 def get_real_financial_data(ticker: str):
     try:
