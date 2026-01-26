@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, status, Request 
+from fastapi import FastAPI, HTTPException, Depends, status, Request, Response, Cookie
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel, EmailStr, Field, field_validator
@@ -190,18 +190,29 @@ def create_access_token(data: dict):
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
-async def get_current_user_optional(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
-    if not token: return None
+async def get_current_user_optional(
+    token: str = Depends(oauth2_scheme), 
+    access_token: Optional[str] = Cookie(None),
+    db: Session = Depends(get_db)
+):
+    # Priority: Cookie first, then Authorization header (for backward compatibility)
+    token_to_use = access_token or token
+    if not token_to_use: return None
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(token_to_use, SECRET_KEY, algorithms=[ALGORITHM])
         email: str = payload.get("sub")
         if email is None: return None
     except JWTError: return None
     return db.query(User).filter(User.email == email).first()
 
-async def get_current_user_mandatory(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
-    if not token: raise HTTPException(status_code=401, detail="Not authenticated")
-    user = await get_current_user_optional(token, db)
+async def get_current_user_mandatory(
+    token: str = Depends(oauth2_scheme),
+    access_token: Optional[str] = Cookie(None),
+    db: Session = Depends(get_db)
+):
+    token_to_use = access_token or token
+    if not token_to_use: raise HTTPException(status_code=401, detail="Not authenticated")
+    user = await get_current_user_optional(token, access_token, db)
     if not user: raise HTTPException(status_code=401, detail="Invalid token")
     return user
 
@@ -263,7 +274,7 @@ def register(user: UserCreate, db: Session = Depends(get_db)):
     return {"message": "User created successfully"}
 
 @app.post("/token", response_model=Token)
-def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+def login(response: Response, form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     # 1. التحقق من المستخدم
     user = db.query(User).filter(User.email == form_data.username).first()
     if not user or not verify_password(form_data.password, user.hashed_password):
@@ -272,11 +283,22 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
     # 2. إنشاء التوكين
     access_token = create_access_token(data={"sub": user.email})
     
-    # 3. 👇 التغيير الكبير: إرجاع البيانات كاملة
+    # 3. 🔒 Set httpOnly, Secure cookie (Google SEO-friendly security)
+    response.set_cookie(
+        key="access_token",
+        value=access_token,
+        httponly=True,  # ✅ Cannot be accessed by JavaScript (XSS protection)
+        secure=True,     # ✅ Only sent over HTTPS (production)
+        samesite="lax",  # ✅ CSRF protection while allowing normal navigation
+        max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,  # 7 days in seconds
+        path="/",
+    )
+    
+    # 4. 👇 Return user data (token now in cookie, not body)
     return {
-        "access_token": access_token,
+        "access_token": access_token,  # Still return for backward compatibility
         "token_type": "bearer",
-        "credits": user.credits, # ✅ الرصيد وصل!
+        "credits": user.credits,
         "user": {
             "email": user.email,
             "first_name": user.first_name,
@@ -290,6 +312,18 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
 @app.get("/users/me")
 def read_users_me(current_user: User = Depends(get_current_user_mandatory)):
     return {"email": current_user.email, "credits": current_user.credits}
+
+@app.post("/logout")
+def logout(response: Response):
+    """Clear the httpOnly cookie to log user out"""
+    response.delete_cookie(
+        key="access_token",
+        path="/",
+        httponly=True,
+        secure=True,
+        samesite="lax"
+    )
+    return {"message": "Logged out successfully"}
 
 
 # ... (Imports existing)
