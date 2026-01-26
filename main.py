@@ -471,6 +471,9 @@ async def analyze_stock(
     lang_map = {
         "en": "English", 
         "ar": "Arabic (Modern Standard, High-End Financial Tone)", 
+        "es": "Spanish (Professional Financial Tone)",
+        "he": "Hebrew (Professional Financial Tone)",
+        "ru": "Russian (Professional Financial Tone)",
         "it": "Italian (Professional Financial Tone)"
     }
     target_lang = lang_map.get(lang, "English")
