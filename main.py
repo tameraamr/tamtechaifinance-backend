@@ -980,6 +980,13 @@ async def analyze_compare(
 ):
     # --- 🛡️ نظام الحماية المتطور (IP & Credits) ---
     if current_user:
+        # Email verification check for logged-in users
+        if current_user.is_verified != 1:
+            raise HTTPException(
+                status_code=403, 
+                detail="Please verify your email to access this feature. Check your inbox for the verification link."
+            )
+        
         if current_user.credits < 2:
             raise HTTPException(status_code=402, detail="Insufficient credits. 2 credits required.")
     else:
