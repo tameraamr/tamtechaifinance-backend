@@ -17,6 +17,8 @@ from datetime import datetime, timedelta
 from jose import JWTError, jwt
 import bcrypt
 import re
+import secrets
+from mailer import send_verification_email
 
 # Load environment variables
 load_dotenv()
@@ -60,7 +62,8 @@ class User(Base):
     country = Column(String)              # إجباري
     address = Column(String, nullable=True) # اختياري
     
-    credits = Column(Integer, default=0) 
+    credits = Column(Integer, default=0)
+    is_verified = Column(Integer, default=0)  # 0 = not verified, 1 = verified 
 
 # هذا الجدول يسجل IP الزائر وكم مرة استخدم الموقع
 class GuestUsage(Base):
@@ -86,6 +89,15 @@ class AnalysisReport(Base):
     ai_json_data = Column(Text)  # Stores full AI analysis as JSON string (using Text for large data)
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+
+# 3. جدول التحقق من البريد الإلكتروني
+class VerificationToken(Base):
+    __tablename__ = "verification_tokens"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, index=True)
+    token = Column(String, unique=True, index=True)
+    expires_at = Column(DateTime)
+    created_at = Column(DateTime, default=func.now())
 
 # إنشاء الجداول تلقائياً
 Base.metadata.create_all(bind=engine)
@@ -235,6 +247,20 @@ async def get_current_user_mandatory(
     if not user: raise HTTPException(status_code=401, detail="Invalid token")
     return user
 
+async def verified_user_required(
+    current_user: User = Depends(get_current_user_mandatory)
+):
+    """
+    Dependency to ensure user is both authenticated AND email-verified
+    Use this on protected endpoints that require verified email
+    """
+    if current_user.is_verified != 1:
+        raise HTTPException(
+            status_code=403, 
+            detail="Please verify your email to access this feature. Check your inbox for the verification link."
+        )
+    return current_user
+
 # --- Models ---
 class UserCreate(BaseModel):
     email: EmailStr
@@ -286,6 +312,41 @@ def register(user: UserCreate, db: Session = Depends(get_db)):
         phone_number=user.phone_number,
         country=user.country,
         address=user.address,
+        credits=3,  # رصيد مجاني للبداية
+        is_verified=0  # يحتاج للتحقق من البريد
+    )
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    
+    # إنشاء رمز التحقق (UUID آمن)
+    verification_token = secrets.token_urlsafe(32)
+    expires_at = datetime.utcnow() + timedelta(hours=24)
+    
+    token_entry = VerificationToken(
+        user_id=new_user.id,
+        token=verification_token,
+        expires_at=expires_at
+    )
+    db.add(token_entry)
+    db.commit()
+    
+    # إرسال البريد الإلكتروني للتحقق
+    try:
+        send_verification_email(
+            user_email=new_user.email,
+            user_name=new_user.first_name,
+            token=verification_token
+        )
+        print(f"✅ Verification email sent to {new_user.email}")
+    except Exception as e:
+        print(f"⚠️ Failed to send verification email: {e}")
+        # لا نفشل التسجيل إذا فشل إرسال البريد، يمكن إعادة الإرسال لاحقاً
+    
+    return {
+        "message": "User created successfully. Please check your email to verify your account.",
+        "email": new_user.email
+    }
         credits=3 # رصيد مجاني للبداية
     )
     db.add(new_user)
@@ -331,7 +392,16 @@ def login(response: Response, form_data: OAuth2PasswordRequestForm = Depends(), 
 
 @app.get("/users/me")
 def read_users_me(current_user: User = Depends(get_current_user_mandatory)):
-    return {"email": current_user.email, "credits": current_user.credits}
+    return {
+        "email": current_user.email, 
+        "credits": current_user.credits,
+        "is_verified": current_user.is_verified,
+        "first_name": current_user.first_name,
+        "last_name": current_user.last_name,
+        "phone_number": current_user.phone_number,
+        "country": current_user.country,
+        "address": current_user.address
+    }
 
 @app.post("/logout")
 def logout(response: Response):
@@ -344,6 +414,84 @@ def logout(response: Response):
         samesite="lax"
     )
     return {"message": "Logged out successfully"}
+
+# --- Email Verification Routes ---
+@app.get("/auth/verify-email")
+def verify_email(token: str, db: Session = Depends(get_db)):
+    """
+    Verify user email with token from verification email
+    """
+    # Find the token in database
+    token_entry = db.query(VerificationToken).filter(VerificationToken.token == token).first()
+    
+    if not token_entry:
+        raise HTTPException(status_code=404, detail="Invalid verification token")
+    
+    # Check if token has expired
+    if datetime.utcnow() > token_entry.expires_at:
+        db.delete(token_entry)
+        db.commit()
+        raise HTTPException(status_code=410, detail="Verification token has expired. Please request a new one.")
+    
+    # Get the user
+    user = db.query(User).filter(User.id == token_entry.user_id).first()
+    
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Check if already verified
+    if user.is_verified == 1:
+        db.delete(token_entry)
+        db.commit()
+        return {"message": "Email already verified", "redirect": "https://www.tamtech-finance.com/dashboard?already_verified=true"}
+    
+    # Mark user as verified
+    user.is_verified = 1
+    db.delete(token_entry)  # Remove used token
+    db.commit()
+    
+    print(f"✅ User {user.email} verified successfully")
+    
+    return {
+        "message": "Email verified successfully! You can now access all features.",
+        "redirect": "https://www.tamtech-finance.com/dashboard?verified=true"
+    }
+
+@app.post("/auth/resend-verification")
+def resend_verification(current_user: User = Depends(get_current_user_mandatory), db: Session = Depends(get_db)):
+    """
+    Resend verification email to logged-in user
+    """
+    if current_user.is_verified == 1:
+        raise HTTPException(status_code=400, detail="Email already verified")
+    
+    # Delete old tokens for this user
+    db.query(VerificationToken).filter(VerificationToken.user_id == current_user.id).delete()
+    db.commit()
+    
+    # Create new token
+    verification_token = secrets.token_urlsafe(32)
+    expires_at = datetime.utcnow() + timedelta(hours=24)
+    
+    token_entry = VerificationToken(
+        user_id=current_user.id,
+        token=verification_token,
+        expires_at=expires_at
+    )
+    db.add(token_entry)
+    db.commit()
+    
+    # Send email
+    try:
+        send_verification_email(
+            user_email=current_user.email,
+            user_name=current_user.first_name,
+            token=verification_token
+        )
+        return {"message": "Verification email sent. Please check your inbox."}
+    except Exception as e:
+        print(f"❌ Error sending verification email: {e}")
+        raise HTTPException(status_code=500, detail="Failed to send verification email")
 
 
 # ... (Imports existing)
@@ -486,7 +634,7 @@ async def analyze_stock(
     current_user: User = Depends(get_current_user_optional)
 ):
     """
-    🔒 STRICT MONETIZATION & CACHING LOGIC
+    🔒 STRICT MONETIZATION & CACHING LOGIC + EMAIL VERIFICATION REQUIRED
     
     Every request costs 1 credit (no exceptions).
     Cache is used only for speed and AI cost savings.
@@ -501,6 +649,13 @@ async def analyze_stock(
         credits_left = 0
         
         if current_user:
+            # Email verification check for logged-in users
+            if current_user.is_verified != 1:
+                raise HTTPException(
+                    status_code=403, 
+                    detail="Please verify your email to access this feature. Check your inbox for the verification link."
+                )
+            
             # Dev mode bypass
             if ticker == "#DEVMODE":
                 current_user.credits = 1000
