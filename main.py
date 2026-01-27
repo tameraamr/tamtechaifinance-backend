@@ -197,12 +197,19 @@ async def get_current_user_optional(
 ):
     # Priority: Cookie first, then Authorization header (for backward compatibility)
     token_to_use = access_token or token
-    if not token_to_use: return None
+    if not token_to_use: 
+        print("⚠️ No token found (neither cookie nor header)")
+        return None
     try:
         payload = jwt.decode(token_to_use, SECRET_KEY, algorithms=[ALGORITHM])
         email: str = payload.get("sub")
-        if email is None: return None
-    except JWTError: return None
+        if email is None: 
+            print("⚠️ Token decoded but no email in payload")
+            return None
+        print(f"✅ User authenticated via cookie: {email}")
+    except JWTError as e:
+        print(f"⚠️ JWT decode error: {e}")
+        return None
     return db.query(User).filter(User.email == email).first()
 
 async def get_current_user_mandatory(
@@ -293,6 +300,7 @@ def login(response: Response, form_data: OAuth2PasswordRequestForm = Depends(), 
         samesite="none",  # ✅ Required for cross-origin cookies (frontend on Vercel, backend on Railway)
         max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,  # 7 days in seconds
         path="/",
+        domain=None,  # ✅ Don't set domain - let browser handle it
     )
     
     # 4. 👇 Return user data (token now in cookie, not body)
