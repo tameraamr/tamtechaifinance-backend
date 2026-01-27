@@ -459,6 +459,60 @@ def logout(response: Response):
     )
     return {"message": "Logged out successfully"}
 
+# --- User Profile Update ---
+class UserProfileUpdate(BaseModel):
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+
+@app.put("/users/profile")
+def update_user_profile(
+    profile_data: UserProfileUpdate,
+    current_user: User = Depends(get_current_user_mandatory),
+    db: Session = Depends(get_db)
+):
+    """Update user profile information"""
+    if profile_data.first_name is not None:
+        current_user.first_name = profile_data.first_name.strip()
+    if profile_data.last_name is not None:
+        current_user.last_name = profile_data.last_name.strip()
+    
+    db.commit()
+    db.refresh(current_user)
+    
+    return {
+        "message": "Profile updated successfully",
+        "first_name": current_user.first_name,
+        "last_name": current_user.last_name
+    }
+
+# --- Password Change ---
+class PasswordChangeRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+@app.post("/users/change-password")
+def change_password(
+    password_data: PasswordChangeRequest,
+    current_user: User = Depends(get_current_user_mandatory),
+    db: Session = Depends(get_db)
+):
+    """Change user password"""
+    # Verify current password
+    if not bcrypt.checkpw(password_data.current_password.encode('utf-8'), current_user.hashed_password.encode('utf-8')):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+    
+    # Validate new password strength
+    if len(password_data.new_password) < 8:
+        raise HTTPException(status_code=400, detail="New password must be at least 8 characters long")
+    
+    # Hash and update password
+    hashed_new_password = bcrypt.hashpw(password_data.new_password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+    current_user.hashed_password = hashed_new_password
+    
+    db.commit()
+    
+    return {"message": "Password changed successfully"}
+
 # --- Email Verification Routes ---
 @app.get("/auth/verify-email")
 def verify_email(token: str, db: Session = Depends(get_db)):
