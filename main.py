@@ -643,6 +643,70 @@ async def get_user_dashboard_history(
         raise HTTPException(status_code=500, detail=f"Failed to load history: {str(e)}")
 
 
+@app.get("/dashboard/analysis/{ticker}")
+async def get_historical_analysis(
+    ticker: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(verified_user_required)
+):
+    """
+    Fetch a specific historical analysis report for viewing.
+    Returns the full cached analysis data if it exists and belongs to the user.
+    """
+    try:
+        ticker = ticker.upper()
+        
+        # Verify user has this ticker in their history
+        user_history = db.query(UserAnalysisHistory).filter(
+            UserAnalysisHistory.user_id == current_user.id,
+            UserAnalysisHistory.ticker == ticker
+        ).first()
+        
+        if not user_history:
+            raise HTTPException(status_code=404, detail="Analysis not found in your history")
+        
+        # Check if expired (> 24 hours)
+        age = datetime.utcnow() - user_history.updated_at
+        hours_ago = int(age.total_seconds() / 3600)
+        is_expired = hours_ago >= 24
+        
+        if is_expired:
+            raise HTTPException(status_code=410, detail="This analysis has expired. Please refresh to get updated data.")
+        
+        # Fetch the cached report from AnalysisReport table
+        cached_report = db.query(AnalysisReport).filter(AnalysisReport.ticker == ticker).first()
+        
+        if not cached_report:
+            raise HTTPException(status_code=404, detail="Analysis report not found in cache")
+        
+        # Parse the JSON data
+        analysis_json = json.loads(cached_report.ai_json_data)
+        
+        # Get live financial data for chart and current price
+        live_financial_data = get_real_financial_data(ticker)
+        
+        if not live_financial_data or not live_financial_data.get('price'):
+            raise HTTPException(status_code=500, detail="Failed to fetch current market data")
+        
+        # Merge the analysis with live market data
+        final_result = {
+            **analysis_json,
+            "price": live_financial_data["price"],
+            "change_percent": live_financial_data.get("change_percent"),
+            "chart_data": live_financial_data.get("chart_data"),
+            "cache_hit": True,
+            "cache_age_hours": round(age.total_seconds() / 3600, 1)
+        }
+        
+        return final_result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Historical analysis fetch error: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to load analysis: {str(e)}")
+
+
 # ... (Imports existing)
 
 # 👇👇👇 أضف هذا الـ Endpoint الجديد هنا 👇👇👇
@@ -854,9 +918,9 @@ async def analyze_stock(
         cached_report = db.query(AnalysisReport).filter(AnalysisReport.ticker == ticker).first()
         
         if cached_report and not force_refresh:
-            # Check if cache is still valid (within 6 hours)
+            # Check if cache is still valid (within 24 hours)
             cache_age = datetime.utcnow() - cached_report.updated_at
-            if cache_age < timedelta(hours=6):
+            if cache_age < timedelta(hours=24):
                 cache_hit = True
                 analysis_json = json.loads(cached_report.ai_json_data)
                 cache_age_hours = cache_age.total_seconds() / 3600
