@@ -10,7 +10,7 @@ import json
 import random
 import requests
 from dotenv import load_dotenv
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, func
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, func
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from datetime import datetime, timedelta
@@ -18,23 +18,26 @@ from jose import JWTError, jwt
 import bcrypt
 import re
 
-# --- Database & Security (Deployment Ready) ---
-# 👇 هذا الكود الذكي يختار القاعدة المناسبة تلقائياً
-# --- Database & Security (Deployment Ready) ---
+# Load environment variables
+load_dotenv()
+
+# --- Database & Security (PostgreSQL ONLY) ---
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-if DATABASE_URL:
-    # تعديل الرابط ليعمل مع مكتبة psycopg2 سواء كان من Render أو Supabase
-    if DATABASE_URL.startswith("postgres://"):
-        DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+psycopg2://", 1)
-    elif DATABASE_URL.startswith("postgresql://"):
-        DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
-    
-    engine = create_engine(DATABASE_URL)
-else:
-    # Localhost (SQLite)
-    SQLALCHEMY_DATABASE_URL = "sqlite:///./users.db"
-    engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
+if not DATABASE_URL:
+    raise ValueError(
+        "❌ DATABASE_URL environment variable is required!\n"
+        "Please set it in your .env file or environment.\n"
+        "Example: DATABASE_URL=postgresql://user:password@localhost:5432/dbname"
+    )
+
+# Fix URL format for psycopg2
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+psycopg2://", 1)
+elif DATABASE_URL.startswith("postgresql://"):
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
+
+engine = create_engine(DATABASE_URL)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
@@ -66,7 +69,7 @@ class GuestUsage(Base):
     attempts = Column(Integer, default=0)
     last_attempt = Column(DateTime, default=datetime.utcnow)
 
-    # 1. إنشاء جدول لتخزين آخر التحليلات
+# 1. إنشاء جدول لتخزين آخر التحليلات
 class AnalysisHistory(Base):
     __tablename__ = "analysis_history"
     id = Column(Integer, primary_key=True, index=True)
@@ -74,6 +77,15 @@ class AnalysisHistory(Base):
     verdict = Column(String)  # BUY, SELL, HOLD
     confidence_score = Column(Integer)
     created_at = Column(DateTime, default=func.now())
+
+# 2. جدول تخزين التقارير الكاملة (6-hour cache)
+class AnalysisReport(Base):
+    __tablename__ = "analysis_reports"
+    id = Column(Integer, primary_key=True, index=True)
+    ticker = Column(String, index=True, unique=True)  # One report per ticker
+    ai_json_data = Column(Text)  # Stores full AI analysis as JSON string (using Text for large data)
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
 
 # إنشاء الجداول تلقائياً
 Base.metadata.create_all(bind=engine)
@@ -473,144 +485,224 @@ async def analyze_stock(
     db: Session = Depends(get_db), 
     current_user: User = Depends(get_current_user_optional)
 ):
-    # --- 🛡️ نظام التقاط الـ IP الحقيقي والحماية ---
-    if current_user:
-        if current_user.credits <= 0: raise HTTPException(status_code=402, detail="No credits left")
-        if ticker == "#DEVMODE":
-            current_user.credits = 1000
-            db.commit()
-            return {"message": "Dev Mode: 1000 Credits Added"}
-    else:
-        # 👇 التعديل الجوهري: الحصول على الـ IP الحقيقي من هيدرز Railway
-        x_forwarded_for = request.headers.get("x-forwarded-for")
-        if x_forwarded_for:
-            client_ip = x_forwarded_for.split(",")[0].strip()
-        else:
-            client_ip = request.client.host
-
-        guest = db.query(GuestUsage).filter(GuestUsage.ip_address == client_ip).first()
-        
-        if not guest:
-            guest = GuestUsage(ip_address=client_ip, attempts=0)
-            db.add(guest)
-        
-        if guest.attempts >= 3: 
-            raise HTTPException(status_code=403, detail="Guest limit reached. Please register.")
-        
-        guest.attempts += 1
-        db.commit()
-    # --- 🛡️ نهاية نظام الحماية ---
+    """
+    🔒 STRICT MONETIZATION & CACHING LOGIC
     
-    # 1. جلب البيانات
-    financial_data = get_real_financial_data(ticker)
-    
-    # 👇 التعديل هنا: إذا لم نجد بيانات، أو وجدنا بيانات لكن بدون سعر (سهم وهمي) -> وقف فوراً
-    if not financial_data or not financial_data.get('price'):
-        raise HTTPException(status_code=404, detail=f"Stock '{ticker}' not found or delisted.")
-    
-    ai_payload = {k: v for k, v in financial_data.items() if k != 'chart_data'}
-    
-    lang_map = {
-        "en": "English", 
-        "ar": "Arabic (Modern Standard, High-End Financial Tone)", 
-        "es": "Spanish (Professional Financial Tone)",
-        "he": "Hebrew (Professional Financial Tone)",
-        "ru": "Russian (Professional Financial Tone)",
-        "it": "Italian (Professional Financial Tone)"
-    }
-    target_lang = lang_map.get(lang, "English")
-
-    # 👇 الـ Prompt المحدث - دسم جداً ويطلب تحليل الأخبار
-    prompt = f"""
-    You are the Chief Investment Officer (CIO) at a prestigious Global Hedge Fund. 
-    Your task is to produce an **EXHAUSTIVE, INSTITUTIONAL-GRADE INVESTMENT MEMO** for {ticker}.
-    
-    **Financial Data & News:** {json.dumps(ai_payload)}
-    **Language:** Write strictly in {target_lang}.
-
-    **⚠️ CRITICAL INSTRUCTIONS:**
-    1.  **EXTREME DEPTH:** Each text section must be LONG, DETAILED, and ANALYTICAL (aim for 400-600 words per chapter).
-    2.  **SENTIMENT ANALYSIS:** Analyze the provided 'recent_news'. For each major news item, determine if it's Positive, Negative, or Neutral and assign an Impact Score (1-10).
-    3.  **NO FLUFF:** Use professional financial terminology. Connect the news to the valuation.
-    4.  **FORMAT:** Return strictly the JSON structure below.
-
-    **REQUIRED JSON OUTPUT:**
-    {{
-        "chapter_1_the_business": "Headline: [Translate 'The Business DNA']. [Write 400+ words detailed essay]",
-        "chapter_2_financials": "Headline: [Translate 'Financial Health']. [Write 400+ words detailed essay]",
-        "chapter_3_valuation": "Headline: [Translate 'Valuation Check']. [Write 400+ words detailed essay]",
-        
-        "news_analysis": [
-    {{
-        "headline": "Title of the news",
-        "sentiment": "positive/negative/neutral",
-        "impact_score": 8,
-        "url": "direct link to the news",
-        "time": "e.g., 2 hours ago or Oct 24"
-    }}
-]
-
-        "bull_case_points": ["Detailed point 1", "Detailed point 2", "Detailed point 3"],
-        "bear_case_points": ["Detailed point 1", "Detailed point 2", "Detailed point 3"],
-        
-        "forecasts": {{
-            "next_1_year": "Detailed 12-month scenario analysis",
-            "next_5_years": "Detailed 2030 outlook"
-        }},
-        
-        "swot_analysis": {{
-            "strengths": ["S1", "S2", "S3"],
-            "weaknesses": ["W1", "W2", "W3"],
-            "opportunities": ["O1", "O2", "O3"],
-            "threats": ["T1", "T2", "T3"]
-        }},
-        
-        "radar_scores": [
-            {{ "subject": "Value", "A": 8 }}, 
-            {{ "subject": "Growth", "A": 7 }},
-            {{ "subject": "Profitability", "A": 9 }}, 
-            {{ "subject": "Health", "A": 6 }},
-            {{ "subject": "Momentum", "A": 8 }}
-        ],
-        
-        "verdict": "BUY / HOLD / SELL", 
-        "confidence_score": 85, 
-        "summary_one_line": "Executive summary"
-    }}
+    Every request costs 1 credit (no exceptions).
+    Cache is used only for speed and AI cost savings.
+    Live price is ALWAYS injected before response.
     """
     
     try:
-        # استخدام الموديل لإنتاج الرد
-        response = model.generate_content(prompt, generation_config={"response_mime_type": "application/json"})
+        ticker = ticker.upper()
         
+        # ========== STEP 1: CREDIT CHECK & DEDUCTION (STRICT POLICY) ==========
+        is_guest = current_user is None
         credits_left = 0
+        
         if current_user:
+            # Dev mode bypass
+            if ticker == "#DEVMODE":
+                current_user.credits = 1000
+                db.commit()
+                return {"message": "Dev Mode: 1000 Credits Added"}
+            
+            # Check credit balance
+            if current_user.credits <= 0:
+                raise HTTPException(status_code=402, detail="No credits left")
+            
+            # 💳 IMMEDIATE DEDUCTION - Before any processing
             current_user.credits -= 1
             db.commit()
             credits_left = current_user.credits
+            
+            print(f"✅ User {current_user.email} charged 1 credit. Remaining: {credits_left}")
+        else:
+            # Guest IP-based limiting
+            x_forwarded_for = request.headers.get("x-forwarded-for")
+            if x_forwarded_for:
+                client_ip = x_forwarded_for.split(",")[0].strip()
+            else:
+                client_ip = request.client.host
 
-        # تحليل الرد والتأكد من تحويله لـ JSON
-        analysis_json = json.loads(response.text)
-
-        # 👇 هذا الكود يحفظ السهم والنتيجة في جدول التاريخ
-        new_history = AnalysisHistory(
-            ticker=ticker.upper(),
-            verdict=analysis_json.get("verdict", "HOLD"),
-            confidence_score=analysis_json.get("confidence_score", 0)
-        )
-        db.add(new_history)
-        db.commit() # حفظ في قاعدة البيانات
+            guest = db.query(GuestUsage).filter(GuestUsage.ip_address == client_ip).first()
+            
+            if not guest:
+                guest = GuestUsage(ip_address=client_ip, attempts=0)
+                db.add(guest)
+            
+            if guest.attempts >= 3:
+                raise HTTPException(status_code=403, detail="Guest limit reached. Please register.")
+            
+            # 💳 IMMEDIATE DEDUCTION for guests
+            guest.attempts += 1
+            db.commit()
+            
+            print(f"✅ Guest {client_ip} used trial {guest.attempts}/3")
         
+        # ========== STEP 2: CACHE LOOKUP (6-Hour Window) ==========
+        cache_hit = False
+        analysis_json = None
+        cached_report = db.query(AnalysisReport).filter(AnalysisReport.ticker == ticker).first()
+        
+        if cached_report:
+            # Check if cache is still valid (within 6 hours)
+            cache_age = datetime.utcnow() - cached_report.updated_at
+            if cache_age < timedelta(hours=6):
+                cache_hit = True
+                analysis_json = json.loads(cached_report.ai_json_data)
+                cache_age_hours = cache_age.total_seconds() / 3600
+                print(f"📦 CACHE HIT for {ticker}. Age: {cache_age_hours:.1f} hours")
+            else:
+                print(f"🗑️ Cache expired for {ticker}. Deleting old report.")
+                db.delete(cached_report)
+                db.commit()
+                cached_report = None
+        
+        # ========== STEP 3: GENERATE NEW REPORT (if no cache) ==========
+        if not cache_hit:
+            print(f"🔬 Generating NEW AI report for {ticker}")
+            
+            # Get financial data (without price for AI prompt)
+            financial_data_for_ai = get_real_financial_data(ticker)
+            
+            if not financial_data_for_ai or not financial_data_for_ai.get('price'):
+                raise HTTPException(status_code=404, detail=f"Stock '{ticker}' not found or delisted.")
+            
+            ai_payload = {k: v for k, v in financial_data_for_ai.items() if k != 'chart_data'}
+        
+            lang_map = {
+                "en": "English", 
+                "ar": "Arabic (Modern Standard, High-End Financial Tone)", 
+                "es": "Spanish (Professional Financial Tone)",
+                "he": "Hebrew (Professional Financial Tone)",
+                "ru": "Russian (Professional Financial Tone)",
+                "it": "Italian (Professional Financial Tone)"
+            }
+            target_lang = lang_map.get(lang, "English")
+
+            prompt = f"""
+            You are the Chief Investment Officer (CIO) at a prestigious Global Hedge Fund. 
+            Your task is to produce an **EXHAUSTIVE, INSTITUTIONAL-GRADE INVESTMENT MEMO** for {ticker}.
+        
+        **Financial Data & News:** {json.dumps(ai_payload)}
+        **Language:** Write strictly in {target_lang}.
+
+        **⚠️ CRITICAL INSTRUCTIONS:**
+        1.  **EXTREME DEPTH:** Each text section must be LONG, DETAILED, and ANALYTICAL (aim for 400-600 words per chapter).
+        2.  **SENTIMENT ANALYSIS:** Analyze the provided 'recent_news'. For each major news item, determine if it's Positive, Negative, or Neutral and assign an Impact Score (1-10).
+        3.  **NO FLUFF:** Use professional financial terminology. Connect the news to the valuation.
+        4.  **FORMAT:** Return strictly the JSON structure below.
+
+        **REQUIRED JSON OUTPUT:**
+        {{
+            "chapter_1_the_business": "Headline: [Translate 'The Business DNA']. [Write 400+ words detailed essay]",
+            "chapter_2_financials": "Headline: [Translate 'Financial Health']. [Write 400+ words detailed essay]",
+            "chapter_3_valuation": "Headline: [Translate 'Valuation Check']. [Write 400+ words detailed essay]",
+            
+            "news_analysis": [
+        {{
+            "headline": "Title of the news",
+            "sentiment": "positive/negative/neutral",
+            "impact_score": 8,
+            "url": "direct link to the news",
+            "time": "e.g., 2 hours ago or Oct 24"
+        }}
+    ]
+
+            "bull_case_points": ["Detailed point 1", "Detailed point 2", "Detailed point 3"],
+            "bear_case_points": ["Detailed point 1", "Detailed point 2", "Detailed point 3"],
+            
+            "forecasts": {{
+                "next_1_year": "Detailed 12-month scenario analysis",
+                "next_5_years": "Detailed 2030 outlook"
+            }},
+            
+            "swot_analysis": {{
+                "strengths": ["S1", "S2", "S3"],
+                "weaknesses": ["W1", "W2", "W3"],
+                "opportunities": ["O1", "O2", "O3"],
+                "threats": ["T1", "T2", "T3"]
+            }},
+            
+            "radar_scores": [
+                {{ "subject": "Value", "A": 8 }}, 
+                {{ "subject": "Growth", "A": 7 }},
+                {{ "subject": "Profitability", "A": 9 }}, 
+                {{ "subject": "Health", "A": 6 }},
+                {{ "subject": "Momentum", "A": 8 }}
+            ],
+            
+            "verdict": "BUY / HOLD / SELL", 
+            "confidence_score": 85, 
+    "summary_one_line": "Executive summary"
+}}
+"""
+        
+            try:
+                response = model.generate_content(prompt, generation_config={"response_mime_type": "application/json"})
+                analysis_json = json.loads(response.text)
+                
+                # Save to cache (upsert pattern)
+                if cached_report:
+                    cached_report.ai_json_data = json.dumps(analysis_json)
+                    cached_report.updated_at = datetime.utcnow()
+                else:
+                    new_report = AnalysisReport(
+                        ticker=ticker,
+                        ai_json_data=json.dumps(analysis_json)
+                    )
+                    db.add(new_report)
+                
+                db.commit()
+                print(f"💾 Saved AI report to cache for {ticker}")
+                
+                # Save to history
+                new_history = AnalysisHistory(
+                    ticker=ticker,
+                    verdict=analysis_json.get("verdict", "HOLD"),
+                    confidence_score=analysis_json.get("confidence_score", 0)
+                )
+                db.add(new_history)
+                db.commit()
+                
+            except Exception as e:
+                print(f"AI Error: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+        
+        # ========== STEP 4: LIVE PRICE INJECTION ==========
+        print(f"💹 Fetching LIVE price for {ticker}")
+        live_financial_data = get_real_financial_data(ticker)
+        
+        if not live_financial_data or not live_financial_data.get('price'):
+            raise HTTPException(status_code=500, detail="Failed to fetch live price")
+        
+        # Calculate cache age for frontend display
+        cache_age_hours = 0
+        if cached_report:
+            cache_age = datetime.utcnow() - cached_report.updated_at
+            cache_age_hours = round(cache_age.total_seconds() / 3600, 1)
+        
+        # ========== FINAL RESPONSE ==========
         return {
-            "ticker": ticker.upper(), 
-            "data": financial_data, 
-            "analysis": analysis_json, 
+            "ticker": ticker,
+            "data": live_financial_data,  # LIVE PRICE + chart data
+            "analysis": analysis_json,     # Cached or fresh AI analysis
             "credits_left": credits_left,
-            "is_guest": current_user is None
+            "is_guest": is_guest,
+            "cache_hit": cache_hit,
+            "cache_age_hours": cache_age_hours
         }
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions (they're already formatted correctly)
+        raise
     except Exception as e:
-        print(f"AI Error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        # Catch any unexpected errors and return proper JSON response
+        print(f"❌ Unexpected error in analyze endpoint: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
     
 
 @app.get("/recent-analyses")
