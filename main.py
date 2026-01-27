@@ -102,6 +102,30 @@ class VerificationToken(Base):
 # إنشاء الجداول تلقائياً
 Base.metadata.create_all(bind=engine)
 
+# --- Database Migration Logic ---
+# Add is_verified column if it doesn't exist (for existing databases)
+try:
+    from sqlalchemy import inspect, text
+    inspector = inspect(engine)
+    
+    # Check if users table has is_verified column
+    users_columns = [col['name'] for col in inspector.get_columns('users')]
+    
+    if 'is_verified' not in users_columns:
+        print("⚙️ Running migration: Adding is_verified column to users table...")
+        with engine.connect() as conn:
+            # PostgreSQL syntax
+            conn.execute(text("ALTER TABLE users ADD COLUMN is_verified INTEGER DEFAULT 0"))
+            conn.commit()
+        print("✅ Migration complete: is_verified column added")
+    else:
+        print("✅ is_verified column already exists")
+        
+except Exception as e:
+    print(f"⚠️ Migration warning: {e}")
+    # Don't fail startup if migration fails
+    pass
+
 # --- Gemini Setup ---
 load_dotenv()
 API_KEY = os.getenv("GOOGLE_API_KEY")
