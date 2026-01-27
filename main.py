@@ -63,7 +63,7 @@ class User(Base):
     address = Column(String, nullable=True) # اختياري
     
     credits = Column(Integer, default=0)
-    is_verified = Column(Integer, default=0)  # 0 = not verified, 1 = verified 
+    is_verified = Column(Integer, default=0, nullable=True)  # 0 = not verified, 1 = verified 
 
 # هذا الجدول يسجل IP الزائر وكم مرة استخدم الموقع
 class GuestUsage(Base):
@@ -299,54 +299,66 @@ class LicenseRequest(BaseModel):
 # --- Routes ---
 @app.post("/register")
 def register(user: UserCreate, db: Session = Depends(get_db)):
-    # التأكد من أن الإيميل غير مستخدم سابقاً
-    if db.query(User).filter(User.email == user.email).first():
-        raise HTTPException(status_code=400, detail="Email already registered")
-    
-    # إنشاء المستخدم مع كافة البيانات
-    new_user = User(
-        email=user.email, 
-        hashed_password=get_password_hash(user.password),
-        first_name=user.first_name,
-        last_name=user.last_name,
-        phone_number=user.phone_number,
-        country=user.country,
-        address=user.address,
-        credits=3,  # رصيد مجاني للبداية
-        is_verified=0  # يحتاج للتحقق من البريد
-    )
-    db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
-    
-    # إنشاء رمز التحقق (UUID آمن)
-    verification_token = secrets.token_urlsafe(32)
-    expires_at = datetime.utcnow() + timedelta(hours=24)
-    
-    token_entry = VerificationToken(
-        user_id=new_user.id,
-        token=verification_token,
-        expires_at=expires_at
-    )
-    db.add(token_entry)
-    db.commit()
-    
-    # إرسال البريد الإلكتروني للتحقق
     try:
-        send_verification_email(
-            user_email=new_user.email,
-            user_name=new_user.first_name,
-            token=verification_token
+        # التأكد من أن الإيميل غير مستخدم سابقاً
+        if db.query(User).filter(User.email == user.email).first():
+            raise HTTPException(status_code=400, detail="Email already registered")
+        
+        # إنشاء المستخدم مع كافة البيانات
+        new_user = User(
+            email=user.email, 
+            hashed_password=get_password_hash(user.password),
+            first_name=user.first_name,
+            last_name=user.last_name,
+            phone_number=user.phone_number,
+            country=user.country,
+            address=user.address,
+            credits=3,  # رصيد مجاني للبداية
+            is_verified=0  # يحتاج للتحقق من البريد
         )
-        print(f"✅ Verification email sent to {new_user.email}")
+        db.add(new_user)
+        db.commit()
+        db.refresh(new_user)
+        
+        # إنشاء رمز التحقق (UUID آمن)
+        verification_token = secrets.token_urlsafe(32)
+        expires_at = datetime.utcnow() + timedelta(hours=24)
+        
+        try:
+            token_entry = VerificationToken(
+                user_id=new_user.id,
+                token=verification_token,
+                expires_at=expires_at
+            )
+            db.add(token_entry)
+            db.commit()
+            
+            # إرسال البريد الإلكتروني للتحقق
+            try:
+                send_verification_email(
+                    user_email=new_user.email,
+                    user_name=new_user.first_name,
+                    token=verification_token
+                )
+                print(f"✅ Verification email sent to {new_user.email}")
+            except Exception as e:
+                print(f"⚠️ Failed to send verification email: {e}")
+                # لا نفشل التسجيل إذا فشل إرسال البريد، يمكن إعادة الإرسال لاحقاً
+        except Exception as e:
+            print(f"⚠️ Failed to create verification token: {e}")
+            # If verification token creation fails, still allow registration
+            # User can verify later via resend
+        
+        return {
+            "message": "User created successfully. Please check your email to verify your account.",
+            "email": new_user.email
+        }
+        
+    except HTTPException:
+        raise
     except Exception as e:
-        print(f"⚠️ Failed to send verification email: {e}")
-        # لا نفشل التسجيل إذا فشل إرسال البريد، يمكن إعادة الإرسال لاحقاً
-    
-    return {
-        "message": "User created successfully. Please check your email to verify your account.",
-        "email": new_user.email
-    }
+        print(f"❌ Registration error: {e}")
+        raise HTTPException(status_code=500, detail=f"Registration failed: {str(e)}")
 
 @app.post("/token", response_model=Token)
 def login(response: Response, form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
