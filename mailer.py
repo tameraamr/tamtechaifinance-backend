@@ -11,7 +11,9 @@ load_dotenv()
 # Configure Resend API
 resend.api_key = os.getenv("RESEND_API_KEY")
 
-SENDER_EMAIL = "noreply@send.tamtech-finance.com"
+# Use verified domain tamtech-finance.com (NOT send.tamtech-finance.com)
+SENDER_EMAIL = "noreply@tamtech-finance.com"
+SENDER_NAME = "Tamtech Finance"
 FRONTEND_URL = os.getenv("FRONTEND_URL", "https://www.tamtech-finance.com")
 
 
@@ -159,7 +161,7 @@ def send_verification_email(user_email: str, user_name: str, token: str) -> bool
     
     try:
         params = {
-            "from": SENDER_EMAIL,
+            "from": f"{SENDER_NAME} <{SENDER_EMAIL}>",
             "to": [user_email],
             "subject": "✅ Verify Your Email - Tamtech Finance",
             "html": html_content,
