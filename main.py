@@ -99,6 +99,19 @@ class VerificationToken(Base):
     expires_at = Column(DateTime)
     created_at = Column(DateTime, default=func.now())
 
+# 4. User Analysis History - Track each user's analyzed stocks
+class UserAnalysisHistory(Base):
+    __tablename__ = "user_analysis_history"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, index=True)  # Links to User.id
+    ticker = Column(String, index=True)
+    company_name = Column(String)
+    last_price = Column(String)  # Store as string to avoid decimal issues
+    verdict = Column(String)
+    confidence_score = Column(Integer)
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+
 # إنشاء الجداول تلقائياً
 Base.metadata.create_all(bind=engine)
 
@@ -525,6 +538,57 @@ def resend_verification(current_user: User = Depends(get_current_user_mandatory)
         raise HTTPException(status_code=500, detail="Failed to send verification email")
 
 
+# ==================== DASHBOARD ENDPOINTS ====================
+
+@app.get("/dashboard/history")
+async def get_user_dashboard_history(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(verified_user_required)
+):
+    """
+    Get user's analysis history with 24-hour expiration tracking.
+    Only verified users can access this endpoint.
+    """
+    try:
+        # Fetch user's analysis history ordered by most recent first
+        user_history = db.query(UserAnalysisHistory).filter(
+            UserAnalysisHistory.user_id == current_user.id
+        ).order_by(UserAnalysisHistory.updated_at.desc()).all()
+        
+        history_items = []
+        now = datetime.utcnow()
+        
+        for item in user_history:
+            # Calculate how old the report is
+            age = now - item.updated_at
+            hours_ago = int(age.total_seconds() / 3600)
+            
+            # Check if expired (> 24 hours)
+            is_expired = hours_ago >= 24
+            
+            history_items.append({
+                "id": item.id,
+                "ticker": item.ticker,
+                "company_name": item.company_name,
+                "last_price": float(item.last_price) if item.last_price else 0,
+                "verdict": item.verdict,
+                "confidence_score": item.confidence_score,
+                "created_at": item.created_at.isoformat(),
+                "updated_at": item.updated_at.isoformat(),
+                "is_expired": is_expired,
+                "hours_ago": hours_ago
+            })
+        
+        return {
+            "history": history_items,
+            "total_count": len(history_items)
+        }
+        
+    except Exception as e:
+        print(f"❌ Dashboard history error: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to load history: {str(e)}")
+
+
 # ... (Imports existing)
 
 # 👇👇👇 أضف هذا الـ Endpoint الجديد هنا 👇👇👇
@@ -660,7 +724,8 @@ def search_ticker(ticker: str):
 async def analyze_stock(
     ticker: str, 
     request: Request, 
-    lang: str = "en", 
+    lang: str = "en",
+    force_refresh: bool = False,  # NEW: Instant Refresh parameter
     db: Session = Depends(get_db), 
     current_user: User = Depends(get_current_user_optional)
 ):
@@ -670,6 +735,8 @@ async def analyze_stock(
     Every request costs 1 credit (no exceptions).
     Cache is used only for speed and AI cost savings.
     Live price is ALWAYS injected before response.
+    
+    force_refresh=True: Skip 6-hour cache, always call AI, costs 1 credit
     """
     
     try:
@@ -727,11 +794,12 @@ async def analyze_stock(
             print(f"✅ Guest {client_ip} used trial {guest.attempts}/3")
         
         # ========== STEP 2: CACHE LOOKUP (6-Hour Window) ==========
+        # Skip cache if force_refresh is True (Instant Refresh feature)
         cache_hit = False
         analysis_json = None
         cached_report = db.query(AnalysisReport).filter(AnalysisReport.ticker == ticker).first()
         
-        if cached_report:
+        if cached_report and not force_refresh:
             # Check if cache is still valid (within 6 hours)
             cache_age = datetime.utcnow() - cached_report.updated_at
             if cache_age < timedelta(hours=6):
@@ -744,8 +812,10 @@ async def analyze_stock(
                 db.delete(cached_report)
                 db.commit()
                 cached_report = None
+        elif force_refresh:
+            print(f"⚡ FORCE REFRESH for {ticker}. Skipping cache.")
         
-        # ========== STEP 3: GENERATE NEW REPORT (if no cache) ==========
+        # ========== STEP 3: GENERATE NEW REPORT (if no cache or force refresh) ==========
         if not cache_hit:
             print(f"🔬 Generating NEW AI report for {ticker}")
             
@@ -868,6 +938,41 @@ async def analyze_stock(
         if cached_report:
             cache_age = datetime.utcnow() - cached_report.updated_at
             cache_age_hours = round(cache_age.total_seconds() / 3600, 1)
+        
+        # ========== STEP 5: UPDATE USER ANALYSIS HISTORY (for logged-in users) ==========
+        if current_user:
+            try:
+                # Check if this ticker already exists in user's history
+                user_history = db.query(UserAnalysisHistory).filter(
+                    UserAnalysisHistory.user_id == current_user.id,
+                    UserAnalysisHistory.ticker == ticker
+                ).first()
+                
+                if user_history:
+                    # Update existing record
+                    user_history.company_name = live_financial_data.get('company_name', ticker)
+                    user_history.last_price = str(live_financial_data.get('price', 0))
+                    user_history.verdict = analysis_json.get('verdict', 'HOLD')
+                    user_history.confidence_score = analysis_json.get('confidence_score', 50)
+                    user_history.updated_at = datetime.utcnow()
+                else:
+                    # Create new record
+                    new_user_history = UserAnalysisHistory(
+                        user_id=current_user.id,
+                        ticker=ticker,
+                        company_name=live_financial_data.get('company_name', ticker),
+                        last_price=str(live_financial_data.get('price', 0)),
+                        verdict=analysis_json.get('verdict', 'HOLD'),
+                        confidence_score=analysis_json.get('confidence_score', 50)
+                    )
+                    db.add(new_user_history)
+                
+                db.commit()
+                print(f"✅ User history updated for {current_user.email}: {ticker}")
+            except Exception as e:
+                print(f"⚠️ Failed to update user history: {e}")
+                # Don't fail the entire request if history update fails
+                db.rollback()
         
         # ========== FINAL RESPONSE ==========
         return {
