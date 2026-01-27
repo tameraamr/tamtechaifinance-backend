@@ -155,7 +155,7 @@ print(f"✅ Ticker Pool Loaded: {len(TICKER_POOL)} stocks (NO SMCI, NO PLTR)")
 
 app = FastAPI()
 
-# 👇 أضف هذا القسم المحدث هنا بالضبط للسماح بالدومين الجديد
+# 👇 CORS Configuration - Updated for httpOnly cookie authentication
 origins = [
     "http://localhost:3000",
     "https://tamtech-frontend.vercel.app",
@@ -165,11 +165,11 @@ origins = [
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # يسمح لـ www.tamtech-finance.com وغيرها بالوصول
-    allow_credentials=True,
+    allow_origins=origins, # ✅ Must specify exact origins when using credentials (not "*")
+    allow_credentials=True, # ✅ Required for httpOnly cookies
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["*"] # أضف هذا السطر لضمان رؤية المتصفح للرد
+    expose_headers=["*"]
 )
 
 # --- Helpers ---
