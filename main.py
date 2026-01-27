@@ -291,16 +291,15 @@ def login(response: Response, form_data: OAuth2PasswordRequestForm = Depends(), 
     access_token = create_access_token(data={"sub": user.email})
     
     # 3. 🔒 Set httpOnly cookie for authentication
-    # Note: secure=True required for samesite=none (browser security policy)
+    # Note: Using samesite=lax since Vercel rewrite makes requests appear same-origin
     response.set_cookie(
         key="access_token",
         value=access_token,
         httponly=True,  # ✅ Cannot be accessed by JavaScript (XSS protection)
-        secure=True,     # ✅ Required for samesite=none (Railway serves HTTPS externally)
-        samesite="none",  # ✅ Required for cross-origin cookies (frontend on Vercel, backend on Railway)
+        secure=True,     # ✅ HTTPS required for secure cookies
+        samesite="lax",  # ✅ Same-site cookie (works with Vercel proxy)
         max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,  # 7 days in seconds
         path="/",
-        domain=None,  # ✅ Don't set domain - let browser handle it
     )
     
     # 4. 👇 Return user data (token now in cookie, not body)
@@ -330,7 +329,7 @@ def logout(response: Response):
         path="/",
         httponly=True,
         secure=True,
-        samesite="none"
+        samesite="lax"
     )
     return {"message": "Logged out successfully"}
 
