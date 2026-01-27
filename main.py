@@ -430,7 +430,8 @@ def login(response: Response, form_data: OAuth2PasswordRequestForm = Depends(), 
             "last_name": user.last_name,
             "phone_number": user.phone_number,
             "country": user.country,
-            "address": user.address
+            "address": user.address,
+            "is_verified": user.is_verified  # ✅ CRITICAL: Include verification status
         }
     }
 
