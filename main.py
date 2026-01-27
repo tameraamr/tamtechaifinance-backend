@@ -347,11 +347,6 @@ def register(user: UserCreate, db: Session = Depends(get_db)):
         "message": "User created successfully. Please check your email to verify your account.",
         "email": new_user.email
     }
-        credits=3 # رصيد مجاني للبداية
-    )
-    db.add(new_user)
-    db.commit()
-    return {"message": "User created successfully"}
 
 @app.post("/token", response_model=Token)
 def login(response: Response, form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
