@@ -688,12 +688,11 @@ async def get_historical_analysis(
         if not live_financial_data or not live_financial_data.get('price'):
             raise HTTPException(status_code=500, detail="Failed to fetch current market data")
         
-        # Merge the analysis with live market data
+        # Merge the analysis with COMPLETE live market data
+        # This ensures all fields like recommendationKey, metrics, etc. are included
         final_result = {
-            **analysis_json,
-            "price": live_financial_data["price"],
-            "change_percent": live_financial_data.get("change_percent"),
-            "chart_data": live_financial_data.get("chart_data"),
+            **live_financial_data,  # Start with ALL financial data
+            **analysis_json,         # Then merge AI analysis (overrides duplicates)
             "cache_hit": True,
             "cache_age_hours": round(age.total_seconds() / 3600, 1)
         }
