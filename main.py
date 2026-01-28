@@ -2383,7 +2383,8 @@ IMPORTANT: Respond in {language} language. Use proper translations for all finan
         response_text = response.text
         
         # Debug: Log raw response
-        print(f"🔍 Raw Gemini response (first 200 chars): {repr(response_text[:200])}")
+        print(f"🔍 Raw Gemini response (first 500 chars): {repr(response_text[:500])}")
+        print(f"🔍 Raw Gemini response length: {len(response_text)}")
         
         # Remove markdown code blocks (```json ... ``` or ``` ... ```)
         if '```' in response_text:
@@ -2410,7 +2411,8 @@ IMPORTANT: Respond in {language} language. Use proper translations for all finan
         response_text = response_text[start_idx:end_idx+1]
         
         # Debug: Log cleaned JSON
-        print(f"🔍 Cleaned JSON (first 200 chars): {repr(response_text[:200])}")
+        print(f"🔍 Cleaned JSON (first 500 chars): {repr(response_text[:500])}")
+        print(f"🔍 Cleaned JSON length: {len(response_text)}")
         
         try:
             audit_result = json.loads(response_text)
@@ -2420,6 +2422,11 @@ IMPORTANT: Respond in {language} language. Use proper translations for all finan
             raise ValueError(f"Failed to parse JSON response: {str(e)}")
         
         # Validate and sanitize audit result
+        print(f"🔍 Parsed audit_result keys: {list(audit_result.keys())}")
+        print(f"🔍 Strengths: {audit_result.get('strengths', 'NOT_FOUND')}")
+        print(f"🔍 Weaknesses: {audit_result.get('weaknesses', 'NOT_FOUND')}")
+        print(f"🔍 Recommendations: {audit_result.get('recommendations', 'NOT_FOUND')}")
+        
         audit_result = {
             "portfolio_health_score": audit_result.get("portfolio_health_score", 0),
             "diversification_score": audit_result.get("diversification_score", 0),
