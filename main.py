@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, status, Request, Response, Cookie
+from fastapi import FastAPI, HTTPException, Depends, status, Request, Response, Cookie, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel, EmailStr, Field, field_validator
@@ -2130,9 +2130,9 @@ async def get_portfolio(
 # Add/Update portfolio holding
 @app.post("/portfolio/add")
 async def add_portfolio_holding(
-    ticker: str,
-    quantity: float,
-    avg_buy_price: float = None,
+    ticker: str = Form(...),
+    quantity: float = Form(...),
+    avg_buy_price: float = Form(None),
     current_user: User = Depends(get_current_user_mandatory),
     db: Session = Depends(get_db)
 ):
