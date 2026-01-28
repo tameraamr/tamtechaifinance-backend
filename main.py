@@ -2024,5 +2024,8 @@ async def get_stock_page_data(
     except HTTPException:
         raise
     except Exception as e:
+        import traceback
         print(f"Error fetching stock page data: {e}")
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
         raise HTTPException(status_code=500, detail=str(e))
