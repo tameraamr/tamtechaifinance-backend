@@ -2332,7 +2332,7 @@ async def audit_portfolio(
         
         # Build AI prompt
         # Use the language from frontend, but ensure it's supported
-        supported_languages = ['en', 'es', 'fr', 'de', 'it', 'pt', 'ar', 'zh', 'ja', 'ko']
+        supported_languages = ['en', 'es', 'fr', 'de', 'it', 'pt', 'ar', 'zh', 'ja', 'ko', 'he', 'ru']
         language = language if language in supported_languages else 'en'
         
         # Map language codes to full names for better AI understanding
@@ -2346,7 +2346,9 @@ async def audit_portfolio(
             'ar': 'Arabic',
             'zh': 'Chinese',
             'ja': 'Japanese',
-            'ko': 'Korean'
+            'ko': 'Korean',
+            'he': 'Hebrew',
+            'ru': 'Russian'
         }
         language_name = language_names.get(language, 'English')
         prompt = f"""You are a professional portfolio analyst. Analyze this investment portfolio and provide a comprehensive audit in {language_name}.
