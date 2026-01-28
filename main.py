@@ -2331,6 +2331,8 @@ async def audit_portfolio(
             item["weight_percent"] = (item["market_value"] / total_value * 100) if total_value > 0 else 0
         
         # Build AI prompt
+        # Force English for reliable JSON parsing
+        language = "en"
         prompt = f"""You are a professional portfolio analyst. Analyze this investment portfolio and provide a comprehensive audit.
 
 PORTFOLIO HOLDINGS:
@@ -2365,20 +2367,23 @@ Provide your analysis in the following JSON format. Make sure to include actual 
 IMPORTANT: 
 - Respond ONLY with valid JSON
 - Fill all arrays with actual analysis content
-- Use the {language} language for all text content
 - Do not include any explanatory text outside the JSON"""
 
         # Call Gemini API with client
         client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
         
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                temperature=0.3,
-                response_mime_type="application/json"
+        try:
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=0.1,  # Lower temperature for more consistent JSON
+                    response_mime_type="application/json"
+                )
             )
-        )
+        except Exception as e:
+            print(f"❌ Gemini API error: {e}")
+            raise HTTPException(status_code=500, detail=f"AI service temporarily unavailable: {str(e)}")
         
         # Clean and parse response - robust handling of Gemini's response format
         response_text = response.text
@@ -2387,29 +2392,9 @@ IMPORTANT:
         print(f"🔍 Raw Gemini response (first 500 chars): {repr(response_text[:500])}")
         print(f"🔍 Raw Gemini response length: {len(response_text)}")
         
-        # Remove markdown code blocks (```json ... ``` or ``` ... ```)
-        if '```' in response_text:
-            # Extract content between triple backticks
-            parts = response_text.split('```')
-            if len(parts) >= 3:
-                # Get the middle part (between opening and closing ```)
-                response_text = parts[1]
-                # Remove language identifier if present (e.g., "json\n{...}")
-                if response_text.strip().startswith('json'):
-                    response_text = response_text.strip()[4:]
-        
-        # Remove all leading/trailing whitespace, newlines, and any non-JSON characters
+        # Since we specified response_mime_type="application/json", 
+        # Gemini should return pure JSON, but let's be safe
         response_text = response_text.strip()
-        
-        # Find the first '{' and last '}' to extract pure JSON
-        start_idx = response_text.find('{')
-        end_idx = response_text.rfind('}')
-        
-        if start_idx == -1 or end_idx == -1:
-            print(f"❌ No JSON braces found in: {repr(response_text[:500])}")
-            raise ValueError("No valid JSON object found in response")
-        
-        response_text = response_text[start_idx:end_idx+1]
         
         # Debug: Log cleaned JSON
         print(f"🔍 Cleaned JSON (first 500 chars): {repr(response_text[:500])}")
@@ -2419,8 +2404,18 @@ IMPORTANT:
             audit_result = json.loads(response_text)
         except json.JSONDecodeError as e:
             print(f"❌ JSON Parse Error: {e}")
-            print(f"❌ Failed JSON string: {repr(response_text[:500])}")
-            raise ValueError(f"Failed to parse JSON response: {str(e)}")
+            print(f"❌ Failed JSON string: {repr(response_text[:1000])}")
+            # Try to extract JSON if there are extra characters
+            import re
+            json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+            if json_match:
+                try:
+                    audit_result = json.loads(json_match.group())
+                    print("✅ Successfully extracted JSON from response")
+                except:
+                    raise ValueError(f"Failed to parse JSON response even after extraction: {str(e)}")
+            else:
+                raise ValueError(f"Failed to parse JSON response: {str(e)}")
         
         # Validate and sanitize audit result
         print(f"🔍 Parsed audit_result keys: {list(audit_result.keys())}")
