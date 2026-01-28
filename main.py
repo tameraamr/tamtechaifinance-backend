@@ -12,7 +12,7 @@ import random
 # Version: 1.0.1 - Fixed is_verified in login response
 import requests
 from dotenv import load_dotenv
-from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, func, Index
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Float, func, Index
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from datetime import datetime, timedelta
