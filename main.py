@@ -2260,7 +2260,7 @@ async def audit_portfolio(
 ):
     """
     🤖 AI PORTFOLIO AUDIT (PREMIUM FEATURE - 5 CREDITS)
-    
+
     Analyzes entire portfolio for:
     - Diversification score
     - Correlation risks
@@ -2269,6 +2269,7 @@ async def audit_portfolio(
     - Personalized recommendations
     """
     try:
+        print(f"🔍 AUDIT START: User {current_user.id}, Language: {language}")
         # Email verification check
         if current_user.is_verified != 1:
             raise HTTPException(
