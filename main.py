@@ -2322,7 +2322,7 @@ Focus on:
 4. Sector balance
 5. Actionable rebalancing advice
 
-IMPORTANT: Respond in {language} language. Use proper translations for all financial terms.""".format(language=language)
+IMPORTANT: Respond in {language} language. Use proper translations for all financial terms."""
 
         # Call Gemini API with client
         client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
