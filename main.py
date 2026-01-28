@@ -1223,18 +1223,34 @@ async def analyze_stock(
         # ========== STEP 4: LIVE PRICE INJECTION ==========
         print(f"💹 Fetching LIVE price for {ticker}")
         live_financial_data = get_real_financial_data(ticker)
+        use_cached_price = False
         
         if not live_financial_data or not live_financial_data.get('price'):
-            # REFUND CREDIT - Price fetch failed
-            if current_user:
-                current_user.credits += 1
-                db.commit()
-                print(f"❌ Price Error - Refunded 1 credit to {current_user.email}. Balance: {current_user.credits}")
+            # If we have cached analysis, use its price as fallback instead of failing
+            if cache_hit and analysis_json:
+                print(f"⚠️ Live price fetch failed, using cached price from analysis")
+                use_cached_price = True
+                # Extract minimal financial data from cached analysis for response
+                live_financial_data = {
+                    "symbol": ticker.upper(),
+                    "price": analysis_json.get("current_price", 0),
+                    "companyName": analysis_json.get("company_name", ticker),
+                    "chart_data": [],  # No fresh chart data available
+                    "currency": "USD"
+                }
             else:
-                if guest:
-                    guest.attempts -= 1
+                # No cache available and price fetch failed - this is a real failure
+                print(f"❌ Price Error - No cache available and live fetch failed for {ticker}")
+                # REFUND CREDIT - Price fetch failed with no fallback
+                if current_user:
+                    current_user.credits += 1
                     db.commit()
-            raise HTTPException(status_code=500, detail="Failed to fetch live price. Your credit has been refunded.")
+                    print(f"❌ Price Error - Refunded 1 credit to {current_user.email}. Balance: {current_user.credits}")
+                else:
+                    if guest:
+                        guest.attempts -= 1
+                        db.commit()
+                raise HTTPException(status_code=500, detail="Failed to fetch live price. Your credit has been refunded.")
         
         # Calculate cache age for frontend display
         cache_age_hours = 0
