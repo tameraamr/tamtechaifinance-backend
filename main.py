@@ -2331,43 +2331,56 @@ async def audit_portfolio(
             item["weight_percent"] = (item["market_value"] / total_value * 100) if total_value > 0 else 0
         
         # Build AI prompt
-        # Force English for reliable JSON parsing
-        language = "en"
-        prompt = f"""You are a professional portfolio analyst. Analyze this investment portfolio and provide a comprehensive audit.
+        # Use the language from frontend, but ensure it's supported
+        supported_languages = ['en', 'es', 'fr', 'de', 'it', 'pt', 'ar', 'zh', 'ja', 'ko']
+        language = language if language in supported_languages else 'en'
+        
+        # Map language codes to full names for better AI understanding
+        language_names = {
+            'en': 'English',
+            'es': 'Spanish', 
+            'fr': 'French',
+            'de': 'German',
+            'it': 'Italian',
+            'pt': 'Portuguese',
+            'ar': 'Arabic',
+            'zh': 'Chinese',
+            'ja': 'Japanese',
+            'ko': 'Korean'
+        }
+        language_name = language_names.get(language, 'English')
+        prompt = f"""You are a professional portfolio analyst. Analyze this investment portfolio and provide a comprehensive audit in {language_name}.
 
 PORTFOLIO HOLDINGS:
 {json.dumps(portfolio_summary, indent=2)}
 
 TOTAL PORTFOLIO VALUE: ${total_value:,.2f}
 
-Provide your analysis in the following JSON format. Make sure to include actual content for all arrays - do not use placeholder text:
+IMPORTANT: You must respond with VALID JSON only. The JSON structure must use English keys, but all text content (summary, strengths, weaknesses, recommendations) must be in {language_name}.
 
 {
   "portfolio_health_score": 75,
   "diversification_score": 60,
   "risk_level": "MEDIUM",
-  "summary": "Your portfolio shows good diversification with a mix of ETFs and individual stocks. The main strengths include broad market exposure, but there are opportunities to reduce concentration in certain sectors.",
+  "summary": "Brief portfolio assessment in {language_name}",
   "strengths": [
-    "Good diversification across multiple asset classes",
-    "Includes both growth and value investments",
-    "Regular dividend payments from stable companies"
+    "First strength in {language_name}",
+    "Second strength in {language_name}",
+    "Third strength in {language_name}"
   ],
   "weaknesses": [
-    "Over-concentration in technology sector",
-    "Limited exposure to international markets",
-    "Some holdings have high volatility"
+    "First weakness in {language_name}",
+    "Second weakness in {language_name}",
+    "Third weakness in {language_name}"
   ],
   "recommendations": [
-    "Consider reducing technology exposure by 10-15%",
-    "Add more international diversification",
-    "Review and potentially sell underperforming stocks"
+    "First recommendation in {language_name}",
+    "Second recommendation in {language_name}",
+    "Third recommendation in {language_name}"
   ]
 }
 
-IMPORTANT: 
-- Respond ONLY with valid JSON
-- Fill all arrays with actual analysis content
-- Do not include any explanatory text outside the JSON"""
+Do not include any text before or after the JSON. Ensure the JSON is valid and all arrays contain meaningful content in {language_name}."""
 
         # Call Gemini API with client
         client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
