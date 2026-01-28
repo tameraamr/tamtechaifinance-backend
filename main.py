@@ -2211,6 +2211,7 @@ async def delete_portfolio_holding(
 # AI Portfolio Audit (PREMIUM - 5 CREDITS)
 @app.post("/portfolio/audit")
 async def audit_portfolio(
+    language: str = Form("en"),
     current_user: User = Depends(get_current_user_mandatory),
     db: Session = Depends(get_db)
 ):
@@ -2319,18 +2320,21 @@ Focus on:
 2. Correlation risks (e.g., tech-heavy portfolios)
 3. Concentration risk (any single stock >25% is concerning)
 4. Sector balance
-5. Actionable rebalancing advice"""
+5. Actionable rebalancing advice
 
-        # Call Gemini API
-        model = genai.GenerativeModel(
-            "gemini-2.0-flash-exp",
-            generation_config={
-                "temperature": 0.3,
-                "response_mime_type": "application/json"
-            }
-        )
+IMPORTANT: Respond in {language} language. Use proper translations for all financial terms.""".format(language=language)
+
+        # Call Gemini API with client
+        client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
         
-        response = model.generate_content(prompt)
+        response = client.models.generate_content(
+            model="gemini-2.0-flash-exp",
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                temperature=0.3,
+                response_mime_type="application/json"
+            )
+        )
         audit_result = json.loads(response.text)
         
         # Save audit to database
