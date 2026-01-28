@@ -1007,7 +1007,8 @@ async def analyze_stock(
         1.  **EXTREME DEPTH:** Each text section must be LONG, DETAILED, and ANALYTICAL (aim for 400-600 words per chapter).
         2.  **SENTIMENT ANALYSIS:** Analyze the provided 'recent_news'. For each major news item, determine if it's Positive, Negative, or Neutral and assign an Impact Score (1-10).
         3.  **NO FLUFF:** Use professional financial terminology. Connect the news to the valuation.
-        4.  **FORMAT:** Return strictly the JSON structure below.
+        4.  **JSON FORMATTING:** You MUST return ONLY valid JSON. NO markdown code blocks, NO extra text. Ensure all quotes inside text fields are properly escaped. For RTL languages (Arabic/Hebrew), be extra careful with quote escaping.
+        5.  **STRUCTURE:** Return strictly the JSON structure below.
 
         **REQUIRED JSON OUTPUT:**
         {{
@@ -1065,7 +1066,8 @@ async def analyze_stock(
                         model=model_name,
                         contents=prompt,
                         config=types.GenerateContentConfig(
-                            response_mime_type="application/json"
+                            response_mime_type="application/json",
+                            temperature=0.3  # Lower temperature for more consistent JSON formatting
                         )
                     )
                 except Exception as timeout_err:
@@ -1073,7 +1075,37 @@ async def analyze_stock(
                         raise Exception("Request timeout - AI took too long")
                     raise
                 
-                analysis_json = json.loads(response.text)
+                # Parse JSON with repair attempts for malformed responses
+                try:
+                    analysis_json = json.loads(response.text)
+                except json.JSONDecodeError as json_err:
+                    print(f"⚠️ Initial JSON parse failed: {json_err}")
+                    print(f"📄 Raw response preview: {response.text[:500]}...")
+                    
+                    # Attempt 1: Strip markdown code blocks (```json ... ```)
+                    cleaned = response.text.strip()
+                    if cleaned.startswith("```"):
+                        cleaned = cleaned.split("```")[1]
+                        if cleaned.startswith("json"):
+                            cleaned = cleaned[4:].strip()
+                    
+                    # Attempt 2: Fix common issues with escaped quotes in Arabic/RTL text
+                    import re
+                    # Fix trailing commas before closing braces/brackets
+                    cleaned = re.sub(r',\s*}', '}', cleaned)
+                    cleaned = re.sub(r',\s*]', ']', cleaned)
+                    
+                    # Attempt 3: Parse the repaired JSON
+                    try:
+                        analysis_json = json.loads(cleaned)
+                        print(f"✅ JSON repaired successfully!")
+                    except json.JSONDecodeError as repair_err:
+                        print(f"❌ JSON repair failed: {repair_err}")
+                        raise json.JSONDecodeError(
+                            f"AI returned malformed JSON even after repair attempts. Original: {json_err}",
+                            response.text,
+                            0
+                        )
                 
                 # Save to cache with language (upsert pattern)
                 try:
