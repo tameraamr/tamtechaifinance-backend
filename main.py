@@ -2338,34 +2338,35 @@ PORTFOLIO HOLDINGS:
 
 TOTAL PORTFOLIO VALUE: ${total_value:,.2f}
 
-Provide your analysis in the following JSON format:
-{{
-  "portfolio_health_score": <0-100 integer>,
-  "diversification_score": <0-100 integer>,
-  "risk_level": "<LOW/MEDIUM/HIGH/VERY HIGH>",
-  "summary": "<One paragraph overall assessment>",
-  "sector_exposure": {{
-    "<sector_name>": <percentage as float>
-  }},
-  "correlations": [
-    {{"pair": ["TICKER1", "TICKER2"], "correlation": "<HIGH/MEDIUM/LOW>", "risk": "<explanation>"}}
+Provide your analysis in the following JSON format. Make sure to include actual content for all arrays - do not use placeholder text:
+
+{
+  "portfolio_health_score": 75,
+  "diversification_score": 60,
+  "risk_level": "MEDIUM",
+  "summary": "Your portfolio shows good diversification with a mix of ETFs and individual stocks. The main strengths include broad market exposure, but there are opportunities to reduce concentration in certain sectors.",
+  "strengths": [
+    "Good diversification across multiple asset classes",
+    "Includes both growth and value investments",
+    "Regular dividend payments from stable companies"
   ],
-  "strengths": ["<strength 1>", "<strength 2>", ...],
-  "weaknesses": ["<weakness 1>", "<weakness 2>", ...],
-  "recommendations": ["<recommendation 1>", "<recommendation 2>", ...],
-  "rebalancing_suggestions": [
-    {{"action": "<BUY/SELL/HOLD>", "ticker": "<TICKER>", "reason": "<explanation>"}}
+  "weaknesses": [
+    "Over-concentration in technology sector",
+    "Limited exposure to international markets",
+    "Some holdings have high volatility"
+  ],
+  "recommendations": [
+    "Consider reducing technology exposure by 10-15%",
+    "Add more international diversification",
+    "Review and potentially sell underperforming stocks"
   ]
-}}
+}
 
-Focus on:
-1. Diversification across sectors and market caps
-2. Correlation risks (e.g., tech-heavy portfolios)
-3. Concentration risk (any single stock >25% is concerning)
-4. Sector balance
-5. Actionable rebalancing advice
-
-IMPORTANT: Respond in {language} language. Use proper translations for all financial terms."""
+IMPORTANT: 
+- Respond ONLY with valid JSON
+- Fill all arrays with actual analysis content
+- Use the {language} language for all text content
+- Do not include any explanatory text outside the JSON"""
 
         # Call Gemini API with client
         client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
@@ -2432,12 +2433,9 @@ IMPORTANT: Respond in {language} language. Use proper translations for all finan
             "diversification_score": audit_result.get("diversification_score", 0),
             "risk_level": audit_result.get("risk_level", "UNKNOWN"),
             "summary": audit_result.get("summary", "Analysis completed but summary not available."),
-            "sector_exposure": audit_result.get("sector_exposure", {}),
-            "correlations": audit_result.get("correlations", []),
             "strengths": audit_result.get("strengths", []) if isinstance(audit_result.get("strengths"), list) else [],
             "weaknesses": audit_result.get("weaknesses", []) if isinstance(audit_result.get("weaknesses"), list) else [],
-            "recommendations": audit_result.get("recommendations", []) if isinstance(audit_result.get("recommendations"), list) else [],
-            "rebalancing_suggestions": audit_result.get("rebalancing_suggestions", []) if isinstance(audit_result.get("rebalancing_suggestions"), list) else []
+            "recommendations": audit_result.get("recommendations", []) if isinstance(audit_result.get("recommendations"), list) else []
         }
         
         # Save audit to database
