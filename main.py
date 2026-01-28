@@ -1969,9 +1969,24 @@ async def get_stock_page_data(
         cache_age_hours = (datetime.utcnow() - cached_report.timestamp).total_seconds() / 3600
         
         # TEASER MODE: Blur high-value data
+        # Build chapters from old format if needed
+        chapters = cached_analysis.get("chapters", [])
+        if not chapters and "chapter_1_the_business" in cached_analysis:
+            # Old format - build chapters array
+            chapters = [
+                {"title": "The Business DNA", "content": cached_analysis.get("chapter_1_the_business", "")},
+                {"title": "Financial Health", "content": cached_analysis.get("chapter_2_financial_health", "")},
+                {"title": "Valuation", "content": cached_analysis.get("chapter_3_valuation", "")},
+                {"title": "Final Verdict", "content": cached_analysis.get("chapter_4_final_verdict", "")}
+            ]
+        
         teaser_analysis = {
-            "summary_one_line": cached_analysis.get("summary_one_line", ""),
-            "chapters": cached_analysis.get("chapters", []),
+            "summary_one_line": cached_analysis.get("summary_one_line", "AI-powered stock analysis"),
+            "chapters": chapters,
+            "chapter_1_the_business": cached_analysis.get("chapter_1_the_business", ""),
+            "chapter_2_financial_health": cached_analysis.get("chapter_2_financial_health", ""),
+            "chapter_3_valuation": cached_analysis.get("chapter_3_valuation", ""),
+            "chapter_4_final_verdict": cached_analysis.get("chapter_4_final_verdict", ""),
             
             # LOCKED FIELDS (blurred on frontend)
             "verdict": "🔒 LOCKED",
