@@ -150,11 +150,17 @@ if not API_KEY:
     client = None
     model_name = None
 else:
-    # Initialize new google.genai client
-    client = genai.Client(api_key=API_KEY)
-    # Use the latest, fastest model for real-time financial analysis
-    # gemini-2.5-flash is the newest and most optimized model (January 2026)
-    model_name = 'gemini-2.5-flash'
+    try:
+        # Initialize new google.genai client
+        client = genai.Client(api_key=API_KEY)
+        # Use the latest, fastest model for real-time financial analysis
+        # gemini-2.5-flash is the newest and most optimized model (January 2026)
+        model_name = 'gemini-2.5-flash'
+        print("✅ Gemini API initialized with gemini-2.5-flash")
+    except Exception as e:
+        print(f"❌ Error initializing Gemini client: {e}")
+        client = None
+        model_name = None
 
 # 🎯 HARD-CODED TICKER POOL - 180+ DIVERSE STOCKS
 # NO SMCI, NO PLTR - Removed to prove true randomness
