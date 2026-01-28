@@ -2078,14 +2078,21 @@ async def get_portfolio(
         
         for holding in holdings:
             # Fetch live price
+            price_error = False
             try:
                 stock = yf.Ticker(holding.ticker)
                 info = stock.info
                 current_price = info.get("currentPrice") or info.get("regularMarketPrice") or 0
+                
+                # If price is 0, mark as error
+                if current_price == 0:
+                    price_error = True
+                    
                 company_name = info.get("shortName") or info.get("longName") or holding.ticker
             except:
                 current_price = 0
                 company_name = holding.ticker
+                price_error = True
             
             # Calculate P&L
             market_value = current_price * holding.quantity
@@ -2106,7 +2113,8 @@ async def get_portfolio(
                 "market_value": market_value,
                 "cost_basis": cost_basis,
                 "pnl": pnl,
-                "pnl_percent": pnl_percent
+                "pnl_percent": pnl_percent,
+                "price_error": price_error
             })
         
         total_pnl = total_value - total_cost
