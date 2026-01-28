@@ -1076,14 +1076,15 @@ async def analyze_stock(
                     raise
                 
                 # Parse JSON with repair attempts for malformed responses
+                raw_response_text = response.text
                 try:
-                    analysis_json = json.loads(response.text)
+                    analysis_json = json.loads(raw_response_text)
                 except json.JSONDecodeError as json_err:
                     print(f"⚠️ Initial JSON parse failed: {json_err}")
-                    print(f"📄 Raw response preview: {response.text[:500]}...")
+                    print(f"📄 Raw response preview: {raw_response_text[:500]}...")
                     
                     # Attempt 1: Strip markdown code blocks (```json ... ```)
-                    cleaned = response.text.strip()
+                    cleaned = raw_response_text.strip()
                     if cleaned.startswith("```"):
                         cleaned = cleaned.split("```")[1]
                         if cleaned.startswith("json"):
@@ -1101,10 +1102,20 @@ async def analyze_stock(
                         print(f"✅ JSON repaired successfully!")
                     except json.JSONDecodeError as repair_err:
                         print(f"❌ JSON repair failed: {repair_err}")
-                        raise json.JSONDecodeError(
-                            f"AI returned malformed JSON even after repair attempts. Original: {json_err}",
-                            response.text,
-                            0
+                        # REFUND CREDIT BEFORE raising exception
+                        if current_user:
+                            current_user.credits += 1
+                            db.commit()
+                            print(f"❌ JSON Error - Refunded 1 credit to {current_user.email}. Balance: {current_user.credits}")
+                        else:
+                            if guest:
+                                guest.attempts -= 1
+                                db.commit()
+                                print(f"❌ JSON Error - Refunded guest trial. Remaining: {3 - guest.attempts}")
+                        
+                        raise HTTPException(
+                            status_code=500,
+                            detail="AI analysis temporarily unavailable. Your credit has been refunded."
                         )
                 
                 # Save to cache with language (upsert pattern)
@@ -1150,24 +1161,9 @@ async def analyze_stock(
                 db.add(new_history)
                 db.commit()
                 
-            except json.JSONDecodeError as e:
-                print(f"JSON Decode Error: {e}")
-                # REFUND CREDIT - AI failed to respond properly
-                if current_user:
-                    current_user.credits += 1
-                    db.commit()
-                    print(f"❌ AI Error - Refunded 1 credit to {current_user.email}. Balance: {current_user.credits}")
-                else:
-                    # Refund guest attempt
-                    if guest:
-                        guest.attempts -= 1
-                        db.commit()
-                        print(f"❌ AI Error - Refunded guest trial. Remaining: {3 - guest.attempts}")
-                
-                raise HTTPException(
-                    status_code=500, 
-                    detail="AI analysis temporarily unavailable. Your credit has been refunded."
-                )
+            except HTTPException:
+                # Re-raise HTTP exceptions (like 500 from JSON parsing)
+                raise
             except Exception as e:
                 error_msg = str(e)
                 print(f"AI Error: {error_msg}")
