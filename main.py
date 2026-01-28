@@ -247,6 +247,70 @@ app.add_middleware(
     expose_headers=["*"]
 )
 
+# ========== SECURITY MIDDLEWARE - Block Malicious Scanners ==========
+from collections import defaultdict
+from fastapi.responses import JSONResponse
+import time
+
+# Rate limiting storage (in-memory, resets on server restart)
+rate_limit_storage = defaultdict(list)
+RATE_LIMIT_WINDOW = 60  # 1 minute window
+MAX_ANALYZE_REQUESTS = 10  # Max 10 analyze requests per minute per IP
+
+# Blocked IPs storage (persistent until restart)
+blocked_ips = set()
+
+@app.middleware("http")
+async def security_middleware(request: Request, call_next):
+    """Block malicious scanner requests and implement rate limiting"""
+    path = request.url.path.lower()
+    
+    # Get client IP
+    x_forwarded_for = request.headers.get("x-forwarded-for")
+    client_ip = x_forwarded_for.split(",")[0].strip() if x_forwarded_for else request.client.host
+    
+    # 1. Check if IP is permanently blocked
+    if client_ip in blocked_ips:
+        print(f"🚫 Blocked IP attempted access: {client_ip}")
+        return JSONResponse(status_code=403, content={"detail": "Access denied"})
+    
+    # 2. Block malicious scanner paths
+    malicious_patterns = [
+        "wp-admin", "wp-login", "wordpress", ".env", "config.php", 
+        "xmlrpc.php", ".git", "phpMyAdmin", "admin.php", "setup.php",
+        "wp-config", "db_config", ".htaccess", "backup.sql"
+    ]
+    
+    if any(pattern in path for pattern in malicious_patterns):
+        print(f"🚨 SECURITY ALERT: Malicious scan detected from {client_ip} - Path: {path}")
+        # Add to blocked IPs after 3 malicious attempts
+        blocked_ips.add(client_ip)
+        return JSONResponse(status_code=403, content={"detail": "Forbidden"})
+    
+    # 3. Rate limiting for /analyze endpoint
+    if "/analyze/" in path and request.method == "GET":
+        current_time = time.time()
+        # Clean old requests outside the time window
+        rate_limit_storage[client_ip] = [
+            timestamp for timestamp in rate_limit_storage[client_ip]
+            if current_time - timestamp < RATE_LIMIT_WINDOW
+        ]
+        
+        # Check if limit exceeded
+        if len(rate_limit_storage[client_ip]) >= MAX_ANALYZE_REQUESTS:
+            print(f"⚠️ Rate limit exceeded for {client_ip} on {path}")
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Too many requests. Please wait a minute and try again."}
+            )
+        
+        # Add current request timestamp
+        rate_limit_storage[client_ip].append(current_time)
+    
+    # Continue with request
+    response = await call_next(request)
+    return response
+
 # --- Health Check Endpoints ---
 @app.get("/")
 async def root():
