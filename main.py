@@ -1041,13 +1041,21 @@ async def analyze_stock(
                 if not client or not model_name:
                     raise HTTPException(status_code=500, detail="AI service not configured")
                 
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json"
+                # Add timeout protection (30 seconds max)
+                import asyncio
+                try:
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=prompt,
+                        config=types.GenerateContentConfig(
+                            response_mime_type="application/json"
+                        )
                     )
-                )
+                except Exception as timeout_err:
+                    if "timeout" in str(timeout_err).lower():
+                        raise Exception("Request timeout - AI took too long")
+                    raise
+                
                 analysis_json = json.loads(response.text)
                 
                 # Save to cache (upsert pattern)
@@ -1075,25 +1083,49 @@ async def analyze_stock(
                 
             except json.JSONDecodeError as e:
                 print(f"JSON Decode Error: {e}")
+                # REFUND CREDIT - AI failed to respond properly
+                if current_user:
+                    current_user.credits += 1
+                    db.commit()
+                    print(f"❌ AI Error - Refunded 1 credit to {current_user.email}. Balance: {current_user.credits}")
+                else:
+                    # Refund guest attempt
+                    if guest:
+                        guest.attempts -= 1
+                        db.commit()
+                        print(f"❌ AI Error - Refunded guest trial. Remaining: {3 - guest.attempts}")
+                
                 raise HTTPException(
                     status_code=500, 
-                    detail="AI analysis temporarily unavailable. Please try again in a moment."
+                    detail="AI analysis temporarily unavailable. Your credit has been refunded."
                 )
             except Exception as e:
                 error_msg = str(e)
                 print(f"AI Error: {error_msg}")
                 
+                # REFUND CREDIT - AI failed
+                if current_user:
+                    current_user.credits += 1
+                    db.commit()
+                    print(f"❌ AI Error - Refunded 1 credit to {current_user.email}. Balance: {current_user.credits}")
+                else:
+                    # Refund guest attempt
+                    if guest:
+                        guest.attempts -= 1
+                        db.commit()
+                        print(f"❌ AI Error - Refunded guest trial. Remaining: {3 - guest.attempts}")
+                
                 # User-friendly error messages
                 if "404" in error_msg or "NOT_FOUND" in error_msg:
-                    user_message = "AI service is updating. Please try again in a few seconds."
+                    user_message = "AI service is updating. Your credit has been refunded."
                 elif "403" in error_msg or "PERMISSION_DENIED" in error_msg:
-                    user_message = "AI service temporarily unavailable. Our team has been notified."
+                    user_message = "AI service temporarily unavailable. Your credit has been refunded."
                 elif "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg:
-                    user_message = "High traffic detected. Please wait a moment and try again."
+                    user_message = "High traffic detected. Your credit has been refunded. Please try again."
                 elif "API key" in error_msg:
-                    user_message = "Service configuration error. Please contact support."
+                    user_message = "Service configuration error. Your credit has been refunded. Contact support."
                 else:
-                    user_message = "Analysis temporarily unavailable. Please try again."
+                    user_message = "Analysis temporarily unavailable. Your credit has been refunded."
                 
                 raise HTTPException(status_code=500, detail=user_message)
         
@@ -1102,7 +1134,16 @@ async def analyze_stock(
         live_financial_data = get_real_financial_data(ticker)
         
         if not live_financial_data or not live_financial_data.get('price'):
-            raise HTTPException(status_code=500, detail="Failed to fetch live price")
+            # REFUND CREDIT - Price fetch failed
+            if current_user:
+                current_user.credits += 1
+                db.commit()
+                print(f"❌ Price Error - Refunded 1 credit to {current_user.email}. Balance: {current_user.credits}")
+            else:
+                if guest:
+                    guest.attempts -= 1
+                    db.commit()
+            raise HTTPException(status_code=500, detail="Failed to fetch live price. Your credit has been refunded.")
         
         # Calculate cache age for frontend display
         cache_age_hours = 0
@@ -1340,23 +1381,34 @@ async def analyze_compare(
         analysis_result = json.loads(response.text)
 
     except json.JSONDecodeError:
+        # REFUND for guests
+        if not current_user and guest:
+            guest.attempts -= 1
+            db.commit()
+            print(f"❌ Comparison Error - Refunded guest trial")
         raise HTTPException(
             status_code=500,
-            detail="Analysis service temporarily unavailable. Please try again."
+            detail="Comparison service temporarily unavailable. Your trial has been refunded."
         )
     except Exception as e:
         error_msg = str(e)
         print(f"Comparison AI Error: {error_msg}")
         
+        # REFUND for guests
+        if not current_user and guest:
+            guest.attempts -= 1
+            db.commit()
+            print(f"❌ Comparison Error - Refunded guest trial")
+        
         # User-friendly messages
         if "404" in error_msg or "NOT_FOUND" in error_msg:
-            user_message = "Comparison service updating. Try again in a moment."
+            user_message = "Comparison service updating. Your trial has been refunded."
         elif "403" in error_msg or "PERMISSION" in error_msg:
-            user_message = "Service temporarily unavailable. Please try again later."
+            user_message = "Service temporarily unavailable. Your trial has been refunded."
         elif "429" in error_msg:
-            user_message = "Too many requests. Please wait 30 seconds."
+            user_message = "Too many requests. Your trial has been refunded. Please wait."
         else:
-            user_message = "Comparison temporarily unavailable. Please try again."
+            user_message = "Comparison temporarily unavailable. Your trial has been refunded."
         
         raise HTTPException(status_code=500, detail=user_message)
     
@@ -1432,22 +1484,31 @@ async def analyze_compare(
         analysis_result = json.loads(response.text)
 
     except json.JSONDecodeError:
+        # REFUND CREDIT
+        current_user.credits += 2
+        db.commit()
+        print(f"❌ Battle Error - Refunded 2 credits to {current_user.email}. Balance: {current_user.credits}")
         raise HTTPException(
             status_code=500,
-            detail="Battle analysis service temporarily unavailable. Try again shortly."
+            detail="Battle analysis temporarily unavailable. Your credits have been refunded."
         )
     except Exception as e:
         error_msg = str(e)
         print(f"Battle AI Error: {error_msg}")
         
+        # REFUND CREDIT
+        current_user.credits += 2
+        db.commit()
+        print(f"❌ Battle Error - Refunded 2 credits to {current_user.email}. Balance: {current_user.credits}")
+        
         if "404" in error_msg or "NOT_FOUND" in error_msg:
-            user_message = "Battle service updating. Please retry in a moment."
+            user_message = "Battle service updating. Your credits have been refunded."
         elif "403" in error_msg or "PERMISSION" in error_msg:
-            user_message = "Service temporarily unavailable. Try again later."
+            user_message = "Service temporarily unavailable. Your credits have been refunded."
         elif "429" in error_msg:
-            user_message = "High demand. Please wait 30 seconds and retry."
+            user_message = "High demand. Your credits have been refunded. Please wait."
         else:
-            user_message = "Battle analysis unavailable. Please try again."
+            user_message = "Battle analysis unavailable. Your credits have been refunded."
         
         raise HTTPException(status_code=500, detail=user_message)
     
