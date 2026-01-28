@@ -800,54 +800,80 @@ def suggest_stock():
     return get_random_ticker_v2()
 
 def get_real_financial_data(ticker: str):
-    try:
-        stock = yf.Ticker(ticker)
-        try: current_price = stock.fast_info['last_price']
-        except: 
+    """Fetch stock data with automatic retry on network failures"""
+    max_retries = 3
+    retry_delay = 1  # Start with 1 second
+    
+    for attempt in range(max_retries):
+        try:
+            stock = yf.Ticker(ticker)
+            try: current_price = stock.fast_info['last_price']
+            except: 
+                info = stock.info
+                current_price = info.get('currentPrice') or info.get('regularMarketPrice')
+            
+            if not current_price: 
+                if attempt < max_retries - 1:
+                    print(f"⚠️ No price found for {ticker}, retrying... (attempt {attempt + 1}/{max_retries})")
+                    import time
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
+                    continue
+                return None
+            
             info = stock.info
-            current_price = info.get('currentPrice') or info.get('regularMarketPrice')
-        
-        if not current_price: return None
-        
-        info = stock.info
-        news = stock.news if hasattr(stock, 'news') else []
-        history = stock.history(period="6mo")
-        chart_data = [{"date": d.strftime('%Y-%m-%d'), "price": round(r['Close'], 2)} for d, r in history.iterrows()]
-        
-        return {
-            "symbol": ticker.upper(),
-            "companyName": info.get('longName', ticker),
-            "price": current_price,
-            "currency": info.get('currency', 'USD'),
-            "market_cap": info.get('marketCap', "N/A"),
-            "fiftyTwoWeekHigh": info.get('fiftyTwoWeekHigh', current_price),
-            "fiftyTwoWeekLow": info.get('fiftyTwoWeekLow', current_price),
-            "targetMeanPrice": info.get('targetMeanPrice', "N/A"),
-            "recommendationKey": info.get('recommendationKey', "none"),
+            news = stock.news if hasattr(stock, 'news') else []
+            history = stock.history(period="6mo")
+            chart_data = [{"date": d.strftime('%Y-%m-%d'), "price": round(r['Close'], 2)} for d, r in history.iterrows()]
             
-            # --- Advanced Metrics ---
-            "pe_ratio": info.get('trailingPE', 0),
-            "forward_pe": info.get('forwardPE', 0),
-            "peg_ratio": info.get('pegRatio', 0),
-            "price_to_sales": info.get('priceToSalesTrailing12Months', 0),
-            "price_to_book": info.get('priceToBook', 0),
-            "eps": info.get('trailingEps', 0),
-            "beta": info.get('beta', 0),
-            "dividend_yield": (info.get('dividendYield', 0) or 0) * 100,
-            "profit_margins": (info.get('profitMargins', 0) or 0) * 100,
-            "operating_margins": (info.get('operatingMargins', 0) or 0) * 100,
-            "return_on_equity": (info.get('returnOnEquity', 0) or 0) * 100,
-            "debt_to_equity": (info.get('debtToEquity', 0) or 0),
-            "revenue_growth": (info.get('revenueGrowth', 0) or 0) * 100,
-            "current_ratio": info.get('currentRatio', 0),
+            # Success! Return data
+            if attempt > 0:
+                print(f"✅ Price fetch succeeded on retry {attempt + 1}")
             
-            "chart_data": chart_data,
-            "recent_news": news[:5], 
-            "description": info.get('longBusinessSummary', "No description.")[:600] + "..."
-        }
-    except Exception as e:
-        print(f"YFinance Error: {e}")
-        return None
+            return {
+                "symbol": ticker.upper(),
+                "companyName": info.get('longName', ticker),
+                "price": current_price,
+                "currency": info.get('currency', 'USD'),
+                "market_cap": info.get('marketCap', "N/A"),
+                "fiftyTwoWeekHigh": info.get('fiftyTwoWeekHigh', current_price),
+                "fiftyTwoWeekLow": info.get('fiftyTwoWeekLow', current_price),
+                "targetMeanPrice": info.get('targetMeanPrice', "N/A"),
+                "recommendationKey": info.get('recommendationKey', "none"),
+                
+                # --- Advanced Metrics ---
+                "pe_ratio": info.get('trailingPE', 0),
+                "forward_pe": info.get('forwardPE', 0),
+                "peg_ratio": info.get('pegRatio', 0),
+                "price_to_sales": info.get('priceToSalesTrailing12Months', 0),
+                "price_to_book": info.get('priceToBook', 0),
+                "eps": info.get('trailingEps', 0),
+                "beta": info.get('beta', 0),
+                "dividend_yield": (info.get('dividendYield', 0) or 0) * 100,
+                "profit_margins": (info.get('profitMargins', 0) or 0) * 100,
+                "operating_margins": (info.get('operatingMargins', 0) or 0) * 100,
+                "return_on_equity": (info.get('returnOnEquity', 0) or 0) * 100,
+                "debt_to_equity": (info.get('debtToEquity', 0) or 0),
+                "revenue_growth": (info.get('revenueGrowth', 0) or 0) * 100,
+                "current_ratio": info.get('currentRatio', 0),
+                
+                "chart_data": chart_data,
+                "recent_news": news[:5], 
+                "description": info.get('longBusinessSummary', "No description.")[:600] + "..."
+            }
+            
+        except Exception as e:
+            if attempt < max_retries - 1:
+                print(f"⚠️ YFinance error on attempt {attempt + 1}/{max_retries}: {e}")
+                import time
+                time.sleep(retry_delay)
+                retry_delay *= 2  # Exponential backoff
+                continue
+            else:
+                print(f"❌ YFinance Error after {max_retries} attempts: {e}")
+                return None
+    
+    return None
 
 @app.get("/search-ticker/{ticker}")
 def search_ticker(ticker: str):
