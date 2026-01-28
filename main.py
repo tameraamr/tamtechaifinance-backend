@@ -2060,7 +2060,7 @@ async def get_stock_page_data(
 # Get user's portfolio
 @app.get("/portfolio")
 async def get_portfolio(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_mandatory),
     db: Session = Depends(get_db)
 ):
     """
@@ -2133,7 +2133,7 @@ async def add_portfolio_holding(
     ticker: str,
     quantity: float,
     avg_buy_price: float = None,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_mandatory),
     db: Session = Depends(get_db)
 ):
     """
@@ -2175,7 +2175,7 @@ async def add_portfolio_holding(
 @app.delete("/portfolio/{holding_id}")
 async def delete_portfolio_holding(
     holding_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_mandatory),
     db: Session = Depends(get_db)
 ):
     """
@@ -2203,7 +2203,7 @@ async def delete_portfolio_holding(
 # AI Portfolio Audit (PREMIUM - 5 CREDITS)
 @app.post("/portfolio/audit")
 async def audit_portfolio(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_mandatory),
     db: Session = Depends(get_db)
 ):
     """
