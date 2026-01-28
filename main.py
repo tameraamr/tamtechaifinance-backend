@@ -2335,7 +2335,15 @@ IMPORTANT: Respond in {language} language. Use proper translations for all finan
                 response_mime_type="application/json"
             )
         )
-        audit_result = json.loads(response.text)
+        
+        # Clean and parse response
+        response_text = response.text.strip()
+        # Remove any markdown code blocks if present
+        if response_text.startswith('```'):
+            response_text = response_text.split('\n', 1)[1]
+            response_text = response_text.rsplit('```', 1)[0]
+        
+        audit_result = json.loads(response_text)
         
         # Save audit to database
         audit_record = PortfolioAudit(
@@ -2366,4 +2374,3 @@ IMPORTANT: Respond in {language} language. Use proper translations for all finan
         db.commit()
         
         raise HTTPException(status_code=500, detail=f"Audit failed: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
