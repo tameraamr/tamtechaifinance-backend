@@ -2294,9 +2294,7 @@ async def audit_portfolio(
                 detail="Your portfolio is empty. Add stocks first before running an audit."
             )
         
-        # DEDUCT 5 CREDITS IMMEDIATELY
-        current_user.credits -= 5
-        db.commit()
+        # NOTE: Credits will be deducted AFTER successful audit completion
         
         # Fetch live data for all holdings
         portfolio_summary = []
@@ -2460,6 +2458,9 @@ Format:
             portfolio_health_score=audit_result.get("portfolio_health_score", 0)
         )
         db.add(audit_record)
+        
+        # DEDUCT 5 CREDITS ONLY AFTER SUCCESSFUL AUDIT
+        current_user.credits -= 5
         db.commit()
         
         return {
