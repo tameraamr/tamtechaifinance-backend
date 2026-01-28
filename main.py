@@ -173,7 +173,7 @@ except Exception as e:
     pass
 
 # --- Gemini Setup ---
-load_dotenv()
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env'))
 API_KEY = os.getenv("GOOGLE_API_KEY")
 # ملاحظة: في السيرفر لا توقف التطبيق إذا لم تجد المفتاح فوراً، السيرفر سيحقنه
 if not API_KEY: 
