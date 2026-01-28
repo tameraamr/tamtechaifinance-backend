@@ -120,6 +120,31 @@ class UserAnalysisHistory(Base):
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
 
+# 5. Portfolio Holdings - Track user stock portfolios
+class PortfolioHolding(Base):
+    __tablename__ = "portfolio_holdings"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, index=True)  # FK to users
+    ticker = Column(String, index=True)
+    quantity = Column(Float)  # Number of shares
+    avg_buy_price = Column(Float, nullable=True)  # Optional: average purchase price
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    
+    # Composite index for user_id + ticker (one row per user per ticker)
+    __table_args__ = (
+        Index('ix_user_ticker', 'user_id', 'ticker', unique=True),
+    )
+
+# 6. Portfolio Audits - Track AI audit history
+class PortfolioAudit(Base):
+    __tablename__ = "portfolio_audits"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, index=True)
+    audit_json = Column(Text)  # Stores AI audit result as JSON
+    portfolio_health_score = Column(Integer)  # 0-100 score
+    created_at = Column(DateTime, default=func.now())
+
 # إنشاء الجداول تلقائياً
 Base.metadata.create_all(bind=engine)
 
@@ -2028,4 +2053,305 @@ async def get_stock_page_data(
         print(f"Error fetching stock page data: {e}")
         print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== PORTFOLIO TRACKER ENDPOINTS ====================
+
+# Get user's portfolio
+@app.get("/portfolio")
+async def get_portfolio(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    📊 GET USER PORTFOLIO (FREE FEATURE)
+    Returns all holdings with live prices and P&L calculations.
+    """
+    try:
+        holdings = db.query(PortfolioHolding).filter(
+            PortfolioHolding.user_id == current_user.id
+        ).all()
+        
+        portfolio_data = []
+        total_value = 0
+        total_cost = 0
+        
+        for holding in holdings:
+            # Fetch live price
+            try:
+                stock = yf.Ticker(holding.ticker)
+                info = stock.info
+                current_price = info.get("currentPrice") or info.get("regularMarketPrice") or 0
+                company_name = info.get("shortName") or info.get("longName") or holding.ticker
+            except:
+                current_price = 0
+                company_name = holding.ticker
+            
+            # Calculate P&L
+            market_value = current_price * holding.quantity
+            cost_basis = (holding.avg_buy_price or 0) * holding.quantity
+            pnl = market_value - cost_basis if holding.avg_buy_price else 0
+            pnl_percent = (pnl / cost_basis * 100) if cost_basis > 0 else 0
+            
+            total_value += market_value
+            total_cost += cost_basis
+            
+            portfolio_data.append({
+                "id": holding.id,
+                "ticker": holding.ticker,
+                "company_name": company_name,
+                "quantity": holding.quantity,
+                "avg_buy_price": holding.avg_buy_price,
+                "current_price": current_price,
+                "market_value": market_value,
+                "cost_basis": cost_basis,
+                "pnl": pnl,
+                "pnl_percent": pnl_percent
+            })
+        
+        total_pnl = total_value - total_cost
+        total_pnl_percent = (total_pnl / total_cost * 100) if total_cost > 0 else 0
+        
+        return {
+            "success": True,
+            "holdings": portfolio_data,
+            "summary": {
+                "total_value": total_value,
+                "total_cost": total_cost,
+                "total_pnl": total_pnl,
+                "total_pnl_percent": total_pnl_percent,
+                "holdings_count": len(holdings)
+            }
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Add/Update portfolio holding
+@app.post("/portfolio/add")
+async def add_portfolio_holding(
+    ticker: str,
+    quantity: float,
+    avg_buy_price: float = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    ➕ ADD/UPDATE PORTFOLIO HOLDING (FREE FEATURE)
+    """
+    try:
+        ticker = ticker.upper()
+        
+        # Check if holding already exists
+        existing = db.query(PortfolioHolding).filter(
+            PortfolioHolding.user_id == current_user.id,
+            PortfolioHolding.ticker == ticker
+        ).first()
+        
+        if existing:
+            # Update existing holding
+            existing.quantity = quantity
+            if avg_buy_price is not None:
+                existing.avg_buy_price = avg_buy_price
+            existing.updated_at = func.now()
+        else:
+            # Create new holding
+            new_holding = PortfolioHolding(
+                user_id=current_user.id,
+                ticker=ticker,
+                quantity=quantity,
+                avg_buy_price=avg_buy_price
+            )
+            db.add(new_holding)
+        
+        db.commit()
+        return {"success": True, "message": f"Added {ticker} to portfolio"}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Delete portfolio holding
+@app.delete("/portfolio/{holding_id}")
+async def delete_portfolio_holding(
+    holding_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    🗑️ DELETE PORTFOLIO HOLDING (FREE FEATURE)
+    """
+    try:
+        holding = db.query(PortfolioHolding).filter(
+            PortfolioHolding.id == holding_id,
+            PortfolioHolding.user_id == current_user.id
+        ).first()
+        
+        if not holding:
+            raise HTTPException(status_code=404, detail="Holding not found")
+        
+        db.delete(holding)
+        db.commit()
+        return {"success": True, "message": "Holding deleted"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# AI Portfolio Audit (PREMIUM - 5 CREDITS)
+@app.post("/portfolio/audit")
+async def audit_portfolio(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    🤖 AI PORTFOLIO AUDIT (PREMIUM FEATURE - 5 CREDITS)
+    
+    Analyzes entire portfolio for:
+    - Diversification score
+    - Correlation risks
+    - Sector exposure
+    - Overall portfolio health score
+    - Personalized recommendations
+    """
+    try:
+        # Email verification check
+        if current_user.is_verified != 1:
+            raise HTTPException(
+                status_code=403,
+                detail="Please verify your email to access this feature."
+            )
+        
+        # Credit check - costs 5 credits
+        if current_user.credits < 5:
+            raise HTTPException(
+                status_code=402,
+                detail=f"Insufficient credits. Portfolio audit costs 5 credits. You have {current_user.credits} credits."
+            )
+        
+        # Get all holdings
+        holdings = db.query(PortfolioHolding).filter(
+            PortfolioHolding.user_id == current_user.id
+        ).all()
+        
+        if not holdings:
+            raise HTTPException(
+                status_code=400,
+                detail="Your portfolio is empty. Add stocks first before running an audit."
+            )
+        
+        # DEDUCT 5 CREDITS IMMEDIATELY
+        current_user.credits -= 5
+        db.commit()
+        
+        # Fetch live data for all holdings
+        portfolio_summary = []
+        total_value = 0
+        
+        for holding in holdings:
+            try:
+                stock = yf.Ticker(holding.ticker)
+                info = stock.info
+                current_price = info.get("currentPrice") or info.get("regularMarketPrice") or 0
+                sector = info.get("sector", "Unknown")
+                industry = info.get("industry", "Unknown")
+                market_cap = info.get("marketCap", 0)
+                
+                market_value = current_price * holding.quantity
+                total_value += market_value
+                
+                portfolio_summary.append({
+                    "ticker": holding.ticker,
+                    "quantity": holding.quantity,
+                    "current_price": current_price,
+                    "market_value": market_value,
+                    "sector": sector,
+                    "industry": industry,
+                    "market_cap": market_cap
+                })
+            except:
+                continue
+        
+        # Calculate weights
+        for item in portfolio_summary:
+            item["weight_percent"] = (item["market_value"] / total_value * 100) if total_value > 0 else 0
+        
+        # Build AI prompt
+        prompt = f"""You are a professional portfolio analyst. Analyze this investment portfolio and provide a comprehensive audit.
+
+PORTFOLIO HOLDINGS:
+{json.dumps(portfolio_summary, indent=2)}
+
+TOTAL PORTFOLIO VALUE: ${total_value:,.2f}
+
+Provide your analysis in the following JSON format:
+{{
+  "portfolio_health_score": <0-100 integer>,
+  "diversification_score": <0-100 integer>,
+  "risk_level": "<LOW/MEDIUM/HIGH/VERY HIGH>",
+  "summary": "<One paragraph overall assessment>",
+  "sector_exposure": {{
+    "<sector_name>": <percentage as float>
+  }},
+  "correlations": [
+    {{"pair": ["TICKER1", "TICKER2"], "correlation": "<HIGH/MEDIUM/LOW>", "risk": "<explanation>"}}
+  ],
+  "strengths": ["<strength 1>", "<strength 2>", ...],
+  "weaknesses": ["<weakness 1>", "<weakness 2>", ...],
+  "recommendations": ["<recommendation 1>", "<recommendation 2>", ...],
+  "rebalancing_suggestions": [
+    {{"action": "<BUY/SELL/HOLD>", "ticker": "<TICKER>", "reason": "<explanation>"}}
+  ]
+}}
+
+Focus on:
+1. Diversification across sectors and market caps
+2. Correlation risks (e.g., tech-heavy portfolios)
+3. Concentration risk (any single stock >25% is concerning)
+4. Sector balance
+5. Actionable rebalancing advice"""
+
+        # Call Gemini API
+        model = genai.GenerativeModel(
+            "gemini-2.0-flash-exp",
+            generation_config={
+                "temperature": 0.3,
+                "response_mime_type": "application/json"
+            }
+        )
+        
+        response = model.generate_content(prompt)
+        audit_result = json.loads(response.text)
+        
+        # Save audit to database
+        audit_record = PortfolioAudit(
+            user_id=current_user.id,
+            audit_json=json.dumps(audit_result),
+            portfolio_health_score=audit_result.get("portfolio_health_score", 0)
+        )
+        db.add(audit_record)
+        db.commit()
+        
+        return {
+            "success": True,
+            "credits_remaining": current_user.credits,
+            "audit": audit_result,
+            "portfolio_value": total_value,
+            "holdings_count": len(holdings)
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        print(f"Portfolio audit error: {e}")
+        print(traceback.format_exc())
+        
+        # Refund credits on error
+        current_user.credits += 5
+        db.commit()
+        
+        raise HTTPException(status_code=500, detail=f"Audit failed: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
