@@ -2332,8 +2332,10 @@ async def audit_portfolio(
         
         # Build AI prompt
         # Use the language from frontend, but ensure it's supported
+        # Extract language code (first 2 chars) from locale format like "en-US"
+        language_code = language.split('-')[0].lower() if language else 'en'
         supported_languages = ['en', 'es', 'fr', 'de', 'it', 'pt', 'ar', 'zh', 'ja', 'ko', 'he', 'ru']
-        language = language if language in supported_languages else 'en'
+        language_code = language_code if language_code in supported_languages else 'en'
         
         # Map language codes to full names for better AI understanding
         language_names = {
@@ -2350,39 +2352,21 @@ async def audit_portfolio(
             'he': 'Hebrew',
             'ru': 'Russian'
         }
-        language_name = language_names.get(language, 'English')
-        prompt = f"""You are a professional portfolio analyst. Analyze this investment portfolio and provide a comprehensive audit in {language_name}.
+        language_name = language_names.get(language_code, 'English')
+        prompt = f"""Analyze this investment portfolio and provide a JSON response in {language_name}.
 
-PORTFOLIO HOLDINGS:
-{json.dumps(portfolio_summary, indent=2)}
+PORTFOLIO: {json.dumps(portfolio_summary, indent=2)}
 
-TOTAL PORTFOLIO VALUE: ${total_value:,.2f}
-
-IMPORTANT: You must respond with VALID JSON only. The JSON structure must use English keys, but all text content (summary, strengths, weaknesses, recommendations) must be in {language_name}.
-
-{
+Return ONLY valid JSON with this structure:
+{{
   "portfolio_health_score": 75,
-  "diversification_score": 60,
+  "diversification_score": 60, 
   "risk_level": "MEDIUM",
-  "summary": "Brief portfolio assessment in {language_name}",
-  "strengths": [
-    "First strength in {language_name}",
-    "Second strength in {language_name}",
-    "Third strength in {language_name}"
-  ],
-  "weaknesses": [
-    "First weakness in {language_name}",
-    "Second weakness in {language_name}",
-    "Third weakness in {language_name}"
-  ],
-  "recommendations": [
-    "First recommendation in {language_name}",
-    "Second recommendation in {language_name}",
-    "Third recommendation in {language_name}"
-  ]
-}
-
-Do not include any text before or after the JSON. Ensure the JSON is valid and all arrays contain meaningful content in {language_name}."""
+  "summary": "Portfolio analysis summary in {language_name}",
+  "strengths": ["Strength 1 in {language_name}", "Strength 2 in {language_name}"],
+  "weaknesses": ["Weakness 1 in {language_name}", "Weakness 2 in {language_name}"],
+  "recommendations": ["Recommendation 1 in {language_name}", "Recommendation 2 in {language_name}"]
+}}"""
 
         # Call Gemini API with client
         client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
