@@ -2333,9 +2333,11 @@ async def audit_portfolio(
         # Build AI prompt
         # Use the language from frontend, but ensure it's supported
         # Extract language code (first 2 chars) from locale format like "en-US"
+        print(f"🔍 Received language parameter: {repr(language)}")
         language_code = language.split('-')[0].lower() if language else 'en'
         supported_languages = ['en', 'es', 'fr', 'de', 'it', 'pt', 'ar', 'zh', 'ja', 'ko', 'he', 'ru']
         language_code = language_code if language_code in supported_languages else 'en'
+        print(f"🔍 Extracted language_code: {language_code}")
         
         # Map language codes to full names for better AI understanding
         language_names = {
@@ -2353,23 +2355,44 @@ async def audit_portfolio(
             'ru': 'Russian'
         }
         language_name = language_names.get(language_code, 'English')
-        prompt = f"""Analyze this investment portfolio and provide a JSON response in {language_name}.
+        prompt = f"""You are a professional financial analyst. Analyze this investment portfolio and provide a detailed audit report.
 
-PORTFOLIO: {json.dumps(portfolio_summary, indent=2)}
+PORTFOLIO DATA:
+{json.dumps(portfolio_summary, indent=2)}
 
-Return ONLY valid JSON with this structure:
+INSTRUCTIONS:
+- Provide your complete response in {language_name} language only
+- Analyze diversification, risk, sector exposure, and overall health
+- Give specific, actionable recommendations
+- Be thorough but concise
+
+REQUIRED JSON RESPONSE FORMAT:
 {{
   "portfolio_health_score": 75,
-  "diversification_score": 60, 
+  "diversification_score": 60,
   "risk_level": "MEDIUM",
-  "summary": "Portfolio analysis summary in {language_name}",
-  "strengths": ["Strength 1 in {language_name}", "Strength 2 in {language_name}"],
-  "weaknesses": ["Weakness 1 in {language_name}", "Weakness 2 in {language_name}"],
-  "recommendations": ["Recommendation 1 in {language_name}", "Recommendation 2 in {language_name}"]
-}}"""
+  "summary": "Write a detailed portfolio analysis summary here in {language_name}",
+  "strengths": [
+    "First specific strength of this portfolio in {language_name}",
+    "Second specific strength of this portfolio in {language_name}",
+    "Third specific strength of this portfolio in {language_name}"
+  ],
+  "weaknesses": [
+    "First specific weakness of this portfolio in {language_name}",
+    "Second specific weakness of this portfolio in {language_name}",
+    "Third specific weakness of this portfolio in {language_name}"
+  ],
+  "recommendations": [
+    "First actionable recommendation in {language_name}",
+    "Second actionable recommendation in {language_name}",
+    "Third actionable recommendation in {language_name}"
+  ]
+}}
+
+Return ONLY the JSON object, no additional text."""
 
         # Call Gemini API with client
-        client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+        client = genai.Client(api_key=API_KEY)
         
         try:
             response = client.models.generate_content(
@@ -2390,6 +2413,11 @@ Return ONLY valid JSON with this structure:
         # Debug: Log raw response
         print(f"🔍 Raw Gemini response (first 500 chars): {repr(response_text[:500])}")
         print(f"🔍 Raw Gemini response length: {len(response_text)}")
+        
+        # Check if response is empty
+        if not response_text or response_text.strip() == "":
+            print("❌ ERROR: Empty response from Gemini API")
+            raise HTTPException(status_code=500, detail="AI service returned empty response")
         
         # Since we specified response_mime_type="application/json", 
         # Gemini should return pure JSON, but let's be safe
