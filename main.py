@@ -1076,21 +1076,38 @@ async def analyze_stock(
                 analysis_json = json.loads(response.text)
                 
                 # Save to cache with language (upsert pattern)
-                if cached_report:
-                    # Update existing cache entry
-                    cached_report.ai_json_data = json.dumps(analysis_json)
-                    cached_report.updated_at = datetime.utcnow()
-                else:
-                    # Create new cache entry with language
-                    new_report = AnalysisReport(
-                        ticker=ticker,
-                        language=lang,
-                        ai_json_data=json.dumps(analysis_json)
-                    )
-                    db.add(new_report)
-                
-                db.commit()
-                print(f"💾 Saved AI report to cache for {ticker} (Language: {lang})")
+                try:
+                    if cached_report:
+                        # Update existing cache entry
+                        cached_report.ai_json_data = json.dumps(analysis_json)
+                        cached_report.updated_at = datetime.utcnow()
+                    else:
+                        # Create new cache entry with language
+                        new_report = AnalysisReport(
+                            ticker=ticker,
+                            language=lang,
+                            ai_json_data=json.dumps(analysis_json)
+                        )
+                        db.add(new_report)
+                    
+                    db.commit()
+                    print(f"💾 Saved AI report to cache for {ticker} (Language: {lang})")
+                except Exception as db_error:
+                    # If duplicate key error, try to update instead
+                    print(f"⚠️ Cache save error (likely duplicate): {db_error}")
+                    db.rollback()
+                    # Try to fetch and update the existing record
+                    existing = db.query(AnalysisReport).filter(
+                        AnalysisReport.ticker == ticker,
+                        AnalysisReport.language == lang
+                    ).first()
+                    if existing:
+                        existing.ai_json_data = json.dumps(analysis_json)
+                        existing.updated_at = datetime.utcnow()
+                        db.commit()
+                        print(f"💾 Updated existing cache for {ticker} ({lang})")
+                    else:
+                        print(f"❌ Failed to save cache: {db_error}")
                 
                 # Save to history
                 new_history = AnalysisHistory(
