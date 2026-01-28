@@ -12,7 +12,7 @@ import random
 # Version: 1.0.1 - Fixed is_verified in login response
 import requests
 from dotenv import load_dotenv
-from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, func
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, func, Index
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from datetime import datetime, timedelta
@@ -83,14 +83,20 @@ class AnalysisHistory(Base):
     confidence_score = Column(Integer)
     created_at = Column(DateTime, default=func.now())
 
-# 2. جدول تخزين التقارير الكاملة (6-hour cache)
+# 2. جدول تخزين التقارير الكاملة (24-hour cache with language support)
 class AnalysisReport(Base):
     __tablename__ = "analysis_reports"
     id = Column(Integer, primary_key=True, index=True)
-    ticker = Column(String, index=True, unique=True)  # One report per ticker
+    ticker = Column(String, index=True)  # Stock ticker
+    language = Column(String, index=True, default="en")  # Language code (en, ar, es, etc.)
     ai_json_data = Column(Text)  # Stores full AI analysis as JSON string (using Text for large data)
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    
+    # Composite unique constraint for ticker + language
+    __table_args__ = (
+        Index('ix_ticker_language', 'ticker', 'language', unique=True),
+    )
 
 # 3. جدول التحقق من البريد الإلكتروني
 class VerificationToken(Base):
@@ -698,8 +704,12 @@ async def get_historical_analysis(
         if is_expired:
             raise HTTPException(status_code=410, detail="This analysis has expired. Please refresh to get updated data.")
         
-        # Fetch the cached report from AnalysisReport table
-        cached_report = db.query(AnalysisReport).filter(AnalysisReport.ticker == ticker).first()
+        # Fetch the cached report from AnalysisReport table (language-aware)
+        # Note: For dashboard, we fetch the most recent regardless of language
+        # Or you can add a lang parameter if needed
+        cached_report = db.query(AnalysisReport).filter(
+            AnalysisReport.ticker == ticker
+        ).order_by(AnalysisReport.updated_at.desc()).first()
         
         if not cached_report:
             raise HTTPException(status_code=404, detail="Analysis report not found in cache")
@@ -935,11 +945,16 @@ async def analyze_stock(
             
             print(f"✅ Guest {client_ip} used trial {guest.attempts}/3")
         
-        # ========== STEP 2: CACHE LOOKUP (6-Hour Window) ==========
+        # ========== STEP 2: CACHE LOOKUP (24-Hour Window with Language Support) ==========
         # Skip cache if force_refresh is True (Instant Refresh feature)
         cache_hit = False
         analysis_json = None
-        cached_report = db.query(AnalysisReport).filter(AnalysisReport.ticker == ticker).first()
+        
+        # LANGUAGE-AWARE CACHE: Query by both ticker AND language
+        cached_report = db.query(AnalysisReport).filter(
+            AnalysisReport.ticker == ticker,
+            AnalysisReport.language == lang
+        ).first()
         
         if cached_report and not force_refresh:
             # Check if cache is still valid (within 24 hours)
@@ -948,14 +963,16 @@ async def analyze_stock(
                 cache_hit = True
                 analysis_json = json.loads(cached_report.ai_json_data)
                 cache_age_hours = cache_age.total_seconds() / 3600
-                print(f"📦 CACHE HIT for {ticker}. Age: {cache_age_hours:.1f} hours")
+                print(f"📦 CACHE HIT for {ticker} (Language: {lang}). Age: {cache_age_hours:.1f} hours")
             else:
-                print(f"🗑️ Cache expired for {ticker}. Deleting old report.")
+                print(f"🗑️ Cache expired for {ticker} ({lang}). Deleting old report.")
                 db.delete(cached_report)
                 db.commit()
                 cached_report = None
         elif force_refresh:
-            print(f"⚡ FORCE REFRESH for {ticker}. Skipping cache.")
+            print(f"⚡ FORCE REFRESH for {ticker} ({lang}). Skipping cache.")
+        elif not cached_report:
+            print(f"🆕 No cache found for {ticker} in {lang}. Will generate fresh analysis.")
         
         # ========== STEP 3: GENERATE NEW REPORT (if no cache or force refresh) ==========
         if not cache_hit:
@@ -1058,19 +1075,22 @@ async def analyze_stock(
                 
                 analysis_json = json.loads(response.text)
                 
-                # Save to cache (upsert pattern)
+                # Save to cache with language (upsert pattern)
                 if cached_report:
+                    # Update existing cache entry
                     cached_report.ai_json_data = json.dumps(analysis_json)
                     cached_report.updated_at = datetime.utcnow()
                 else:
+                    # Create new cache entry with language
                     new_report = AnalysisReport(
                         ticker=ticker,
+                        language=lang,
                         ai_json_data=json.dumps(analysis_json)
                     )
                     db.add(new_report)
                 
                 db.commit()
-                print(f"💾 Saved AI report to cache for {ticker}")
+                print(f"💾 Saved AI report to cache for {ticker} (Language: {lang})")
                 
                 # Save to history
                 new_history = AnalysisHistory(
