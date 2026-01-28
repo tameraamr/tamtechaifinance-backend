@@ -241,6 +241,22 @@ app.add_middleware(
     expose_headers=["*"]
 )
 
+# --- Health Check Endpoints ---
+@app.get("/")
+async def root():
+    return {"status": "ok", "message": "TamtechAI Finance API"}
+
+@app.get("/health")
+async def health_check():
+    """Check if API and Gemini are working"""
+    gemini_status = "configured" if (client and model_name) else "not_configured"
+    return {
+        "status": "healthy",
+        "gemini_api": gemini_status,
+        "model": model_name if model_name else "none",
+        "api_key_present": bool(API_KEY)
+    }
+
 # --- Helpers ---
 def get_db():
     db = SessionLocal()
