@@ -1467,6 +1467,108 @@ def get_market_pulse():
         print(f"Error fetching pulse: {e}")
         return []
 
+# --- Dynamic OG Image Generation for Social Sharing ---
+@app.get("/og/{ticker}")
+async def generate_og_image(ticker: str, db: Session = Depends(get_db)):
+    """Generate Open Graph image for stock ticker pages"""
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+        from io import BytesIO
+        from fastapi.responses import StreamingResponse
+        
+        ticker = ticker.upper()
+        
+        # Get cached analysis
+        cached = db.query(AnalysisReport).filter(
+            AnalysisReport.ticker == ticker,
+            AnalysisReport.language == "en"
+        ).first()
+        
+        if not cached:
+            # Return default image if no analysis exists
+            raise HTTPException(status_code=404, detail="No analysis found")
+        
+        analysis = json.loads(cached.ai_json_data)
+        
+        # Create image (1200x630 for OG standard)
+        img = Image.new('RGB', (1200, 630), color='#0f172a')
+        draw = ImageDraw.Draw(img)
+        
+        # Try to load custom font, fallback to default
+        try:
+            title_font = ImageFont.truetype("arial.ttf", 72)
+            subtitle_font = ImageFont.truetype("arial.ttf", 36)
+            small_font = ImageFont.truetype("arial.ttf", 28)
+        except:
+            title_font = ImageFont.load_default()
+            subtitle_font = ImageFont.load_default()
+            small_font = ImageFont.load_default()
+        
+        # Determine colors based on verdict
+        verdict = analysis.get('verdict', 'HOLD')
+        if verdict == 'BUY':
+            verdict_color = '#22c55e'  # Green
+            bg_color = '#10b981'
+        elif verdict == 'SELL':
+            verdict_color = '#ef4444'  # Red
+            bg_color = '#dc2626'
+        else:
+            verdict_color = '#f59e0b'  # Amber
+            bg_color = '#d97706'
+        
+        # Draw gradient background (simulate with rectangles)
+        for i in range(630):
+            alpha = i / 630
+            draw.rectangle([(0, i), (1200, i+1)], fill='#0f172a')
+        
+        # Draw ticker symbol
+        draw.text((60, 80), ticker, font=title_font, fill='#ffffff')
+        
+        # Draw verdict badge
+        draw.rounded_rectangle([(60, 180), (260, 240)], radius=10, fill=verdict_color)
+        draw.text((90, 190), verdict, font=subtitle_font, fill='#ffffff')
+        
+        # Draw confidence score
+        confidence = analysis.get('confidence_score', 0)
+        draw.text((60, 270), f"{confidence}% Confidence", font=subtitle_font, fill='#94a3b8')
+        
+        # Draw summary (truncated)
+        summary = analysis.get('summary_one_line', '')[:120] + '...'
+        # Word wrap for summary
+        words = summary.split()
+        lines = []
+        current_line = []
+        for word in words:
+            current_line.append(word)
+            if len(' '.join(current_line)) > 60:
+                lines.append(' '.join(current_line[:-1]))
+                current_line = [word]
+        if current_line:
+            lines.append(' '.join(current_line))
+        
+        y_offset = 340
+        for line in lines[:3]:  # Max 3 lines
+            draw.text((60, y_offset), line, font=small_font, fill='#cbd5e1')
+            y_offset += 40
+        
+        # Draw branding
+        draw.text((60, 550), "Tamtech Finance", font=subtitle_font, fill='#3b82f6')
+        draw.text((60, 590), "AI-Powered Stock Analysis", font=small_font, fill='#64748b')
+        
+        # Save to bytes
+        img_byte_arr = BytesIO()
+        img.save(img_byte_arr, format='PNG')
+        img_byte_arr.seek(0)
+        
+        return StreamingResponse(img_byte_arr, media_type="image/png", headers={
+            "Cache-Control": "public, max-age=86400",  # Cache for 24 hours
+        })
+        
+    except Exception as e:
+        print(f"OG image generation error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to generate image")
+
+
 # --- Comparison Route (Costs 2 Credits) ---
 @app.get("/analyze-compare/{ticker1}/{ticker2}")
 async def analyze_compare(
