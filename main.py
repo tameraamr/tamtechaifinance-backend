@@ -2208,6 +2208,49 @@ async def delete_portfolio_holding(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# Update portfolio holding ticker
+@app.put("/portfolio/{holding_id}")
+async def update_portfolio_holding(
+    holding_id: int,
+    ticker: str = Form(...),
+    current_user: User = Depends(get_current_user_mandatory),
+    db: Session = Depends(get_db)
+):
+    """
+    ✏️ UPDATE PORTFOLIO HOLDING TICKER (FREE FEATURE)
+    """
+    try:
+        ticker = ticker.upper()
+        
+        holding = db.query(PortfolioHolding).filter(
+            PortfolioHolding.id == holding_id,
+            PortfolioHolding.user_id == current_user.id
+        ).first()
+        
+        if not holding:
+            raise HTTPException(status_code=404, detail="Holding not found")
+        
+        # Check if new ticker already exists for this user
+        existing = db.query(PortfolioHolding).filter(
+            PortfolioHolding.user_id == current_user.id,
+            PortfolioHolding.ticker == ticker,
+            PortfolioHolding.id != holding_id
+        ).first()
+        
+        if existing:
+            raise HTTPException(status_code=400, detail=f"You already have {ticker} in your portfolio")
+        
+        holding.ticker = ticker
+        holding.updated_at = func.now()
+        db.commit()
+        return {"success": True, "message": f"Updated ticker to {ticker}"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # AI Portfolio Audit (PREMIUM - 5 CREDITS)
 @app.post("/portfolio/audit")
 async def audit_portfolio(
