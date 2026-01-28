@@ -1959,9 +1959,10 @@ async def get_stock_page_data(
             current_price = info.get("currentPrice") or info.get("regularMarketPrice")
             company_name = info.get("shortName") or info.get("longName") or ticker
             currency = info.get("currency", "USD")
-        except:
-            # Fallback to cached price if Yahoo Finance fails
-            current_price = cached_report.price
+        except Exception as e:
+            # Fallback if Yahoo Finance fails
+            print(f"Yahoo Finance error: {e}")
+            current_price = None
             company_name = ticker
             currency = "USD"
         
