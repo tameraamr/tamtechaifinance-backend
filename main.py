@@ -1931,11 +1931,17 @@ async def get_stock_page_data(
     try:
         ticker = ticker.upper()
         
-        # Look for cached analysis in database
+        # Look for cached analysis in database (try requested language first, then fallback to any language)
         cached_report = db.query(AnalysisReport).filter(
             AnalysisReport.ticker == ticker,
             AnalysisReport.language == lang
         ).order_by(AnalysisReport.timestamp.desc()).first()
+        
+        # Fallback: If no cache in requested language, use ANY language
+        if not cached_report:
+            cached_report = db.query(AnalysisReport).filter(
+                AnalysisReport.ticker == ticker
+            ).order_by(AnalysisReport.timestamp.desc()).first()
         
         if not cached_report:
             raise HTTPException(
