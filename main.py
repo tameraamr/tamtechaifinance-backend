@@ -3,7 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from typing import Optional
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 import yfinance as yf
 import os
 import json
@@ -146,14 +147,14 @@ API_KEY = os.getenv("GOOGLE_API_KEY")
 # ملاحظة: في السيرفر لا توقف التطبيق إذا لم تجد المفتاح فوراً، السيرفر سيحقنه
 if not API_KEY: 
     print("⚠️ Warning: GOOGLE_API_KEY not found in environment variables.")
+    client = None
+    model_name = None
 else:
-    genai.configure(api_key=API_KEY)
-
-try:
-    # نستخدم الموديل الأقوى والأذكى للتحليل العميق
-    model = genai.GenerativeModel('gemini-2.0-flash-exp')
-except:
-    model = genai.GenerativeModel('gemini-1.5-pro')
+    # Initialize new google.genai client
+    client = genai.Client(api_key=API_KEY)
+    # Use the latest, fastest model for real-time financial analysis
+    # gemini-2.5-flash is the newest and most optimized model (January 2026)
+    model_name = 'gemini-2.5-flash'
 
 # 🎯 HARD-CODED TICKER POOL - 180+ DIVERSE STOCKS
 # NO SMCI, NO PLTR - Removed to prove true randomness
@@ -1015,7 +1016,16 @@ async def analyze_stock(
 """
         
             try:
-                response = model.generate_content(prompt, generation_config={"response_mime_type": "application/json"})
+                if not client or not model_name:
+                    raise HTTPException(status_code=500, detail="AI service not configured")
+                
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json"
+                    )
+                )
                 analysis_json = json.loads(response.text)
                 
                 # Save to cache (upsert pattern)
@@ -1041,9 +1051,29 @@ async def analyze_stock(
                 db.add(new_history)
                 db.commit()
                 
+            except json.JSONDecodeError as e:
+                print(f"JSON Decode Error: {e}")
+                raise HTTPException(
+                    status_code=500, 
+                    detail="AI analysis temporarily unavailable. Please try again in a moment."
+                )
             except Exception as e:
-                print(f"AI Error: {e}")
-                raise HTTPException(status_code=500, detail=str(e))
+                error_msg = str(e)
+                print(f"AI Error: {error_msg}")
+                
+                # User-friendly error messages
+                if "404" in error_msg or "NOT_FOUND" in error_msg:
+                    user_message = "AI service is updating. Please try again in a few seconds."
+                elif "403" in error_msg or "PERMISSION_DENIED" in error_msg:
+                    user_message = "AI service temporarily unavailable. Our team has been notified."
+                elif "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg:
+                    user_message = "High traffic detected. Please wait a moment and try again."
+                elif "API key" in error_msg:
+                    user_message = "Service configuration error. Please contact support."
+                else:
+                    user_message = "Analysis temporarily unavailable. Please try again."
+                
+                raise HTTPException(status_code=500, detail=user_message)
         
         # ========== STEP 4: LIVE PRICE INJECTION ==========
         print(f"💹 Fetching LIVE price for {ticker}")
@@ -1274,14 +1304,41 @@ async def analyze_compare(
         Return strictly JSON with keys: 'verdict' (the long essay), 'winner', 'comparison_summary'.
         """
         
-        response = model.generate_content(
-    prompt, 
-    generation_config={
-        "response_mime_type": "application/json",
-        "temperature": 0.2  # 👈 هذا السطر السحري
-    }
-)
+        if not client or not model_name:
+            raise HTTPException(status_code=500, detail="AI service not configured")
+        
+        response = client.models.generate_content(
+            model=model_name,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                temperature=0.2
+            )
+        )
         analysis_result = json.loads(response.text)
+
+    except json.JSONDecodeError:
+        raise HTTPException(
+            status_code=500,
+            detail="Analysis service temporarily unavailable. Please try again."
+        )
+    except Exception as e:
+        error_msg = str(e)
+        print(f"Comparison AI Error: {error_msg}")
+        
+        # User-friendly messages
+        if "404" in error_msg or "NOT_FOUND" in error_msg:
+            user_message = "Comparison service updating. Try again in a moment."
+        elif "403" in error_msg or "PERMISSION" in error_msg:
+            user_message = "Service temporarily unavailable. Please try again later."
+        elif "429" in error_msg:
+            user_message = "Too many requests. Please wait 30 seconds."
+        else:
+            user_message = "Comparison temporarily unavailable. Please try again."
+        
+        raise HTTPException(status_code=500, detail=user_message)
+    
+    try:
 
         # 4. خصم الكريدت وتحديث البيانات للمسجلين
         credits_left = 0
@@ -1340,8 +1397,39 @@ async def analyze_compare(
         Return strictly JSON with keys: 'verdict' (the long essay), 'winner', 'comparison_summary'.
         """
         
-        response = model.generate_content(prompt, generation_config={"response_mime_type": "application/json"})
+        if not client or not model_name:
+            raise HTTPException(status_code=500, detail="AI service not configured")
+        
+        response = client.models.generate_content(
+            model=model_name,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json"
+            )
+        )
         analysis_result = json.loads(response.text)
+
+    except json.JSONDecodeError:
+        raise HTTPException(
+            status_code=500,
+            detail="Battle analysis service temporarily unavailable. Try again shortly."
+        )
+    except Exception as e:
+        error_msg = str(e)
+        print(f"Battle AI Error: {error_msg}")
+        
+        if "404" in error_msg or "NOT_FOUND" in error_msg:
+            user_message = "Battle service updating. Please retry in a moment."
+        elif "403" in error_msg or "PERMISSION" in error_msg:
+            user_message = "Service temporarily unavailable. Try again later."
+        elif "429" in error_msg:
+            user_message = "High demand. Please wait 30 seconds and retry."
+        else:
+            user_message = "Battle analysis unavailable. Please try again."
+        
+        raise HTTPException(status_code=500, detail=user_message)
+    
+    try:
 
         # 4. خصم الكريدت وتحديث الداتابيز
         current_user.credits -= 2
