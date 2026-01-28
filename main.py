@@ -1935,13 +1935,13 @@ async def get_stock_page_data(
         cached_report = db.query(AnalysisReport).filter(
             AnalysisReport.ticker == ticker,
             AnalysisReport.language == lang
-        ).order_by(AnalysisReport.timestamp.desc()).first()
+        ).order_by(AnalysisReport.created_at.desc()).first()
         
         # Fallback: If no cache in requested language, use ANY language
         if not cached_report:
             cached_report = db.query(AnalysisReport).filter(
                 AnalysisReport.ticker == ticker
-            ).order_by(AnalysisReport.timestamp.desc()).first()
+            ).order_by(AnalysisReport.created_at.desc()).first()
         
         if not cached_report:
             raise HTTPException(
@@ -1966,7 +1966,7 @@ async def get_stock_page_data(
             currency = "USD"
         
         # Calculate cache age
-        cache_age_hours = (datetime.utcnow() - cached_report.timestamp).total_seconds() / 3600
+        cache_age_hours = (datetime.utcnow() - cached_report.created_at).total_seconds() / 3600
         
         # TEASER MODE: Blur high-value data
         # Build chapters from old format if needed
