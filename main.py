@@ -2336,12 +2336,31 @@ IMPORTANT: Respond in {language} language. Use proper translations for all finan
             )
         )
         
-        # Clean and parse response
+        # Clean and parse response - robust handling of Gemini's response format
         response_text = response.text.strip()
-        # Remove any markdown code blocks if present
-        if response_text.startswith('```'):
-            response_text = response_text.split('\n', 1)[1]
-            response_text = response_text.rsplit('```', 1)[0]
+        
+        # Remove markdown code blocks (```json ... ``` or ``` ... ```)
+        if '```' in response_text:
+            # Extract content between triple backticks
+            parts = response_text.split('```')
+            if len(parts) >= 3:
+                # Get the middle part (between opening and closing ```)
+                response_text = parts[1]
+                # Remove language identifier if present (e.g., "json\n{...}")
+                if response_text.startswith('json'):
+                    response_text = response_text[4:]
+        
+        # Remove all leading/trailing whitespace, newlines, and any non-JSON characters
+        response_text = response_text.strip()
+        
+        # Find the first '{' and last '}' to extract pure JSON
+        start_idx = response_text.find('{')
+        end_idx = response_text.rfind('}')
+        
+        if start_idx == -1 or end_idx == -1:
+            raise ValueError("No valid JSON object found in response")
+        
+        response_text = response_text[start_idx:end_idx+1]
         
         audit_result = json.loads(response_text)
         
