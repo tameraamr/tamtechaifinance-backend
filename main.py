@@ -2301,15 +2301,19 @@ async def audit_portfolio(
         # Fetch live data for all holdings
         portfolio_summary = []
         total_value = 0
+        print(f"🔍 Processing {len(holdings)} holdings")
         
         for holding in holdings:
             try:
+                print(f"🔍 Fetching data for {holding.ticker}")
                 stock = yf.Ticker(holding.ticker)
                 info = stock.info
                 current_price = info.get("currentPrice") or info.get("regularMarketPrice") or 0
                 sector = info.get("sector", "Unknown")
                 industry = info.get("industry", "Unknown")
                 market_cap = info.get("marketCap", 0)
+                
+                print(f"🔍 {holding.ticker}: price={current_price}, sector={sector}")
                 
                 market_value = current_price * holding.quantity
                 total_value += market_value
@@ -2323,8 +2327,18 @@ async def audit_portfolio(
                     "industry": industry,
                     "market_cap": market_cap
                 })
-            except:
+            except Exception as e:
+                print(f"❌ Failed to fetch data for {holding.ticker}: {str(e)}")
                 continue
+        
+        print(f"🔍 Portfolio summary length: {len(portfolio_summary)}")
+        print(f"🔍 Total value: ${total_value:,.2f}")
+        
+        if not portfolio_summary:
+            raise HTTPException(
+                status_code=400,
+                detail="Unable to fetch current stock data for your portfolio. Please try again later."
+            )
         
         # Calculate weights
         for item in portfolio_summary:
@@ -2354,43 +2368,22 @@ async def audit_portfolio(
             'he': 'Hebrew',
             'ru': 'Russian'
         }
-        language_name = language_names.get(language_code, 'English')
-        prompt = f"""You are a professional financial analyst. Analyze this investment portfolio and provide a detailed audit report.
+        prompt = f"""Analyze this portfolio and return JSON only:
 
-PORTFOLIO DATA:
 {json.dumps(portfolio_summary, indent=2)}
 
-INSTRUCTIONS:
-- Provide your complete response in {language_name} language only
-- Analyze diversification, risk, sector exposure, and overall health
-- Give specific, actionable recommendations
-- Be thorough but concise
-
-REQUIRED JSON RESPONSE FORMAT:
+Format:
 {{
   "portfolio_health_score": 75,
   "diversification_score": 60,
   "risk_level": "MEDIUM",
-  "summary": "Write a detailed portfolio analysis summary here in {language_name}",
-  "strengths": [
-    "First specific strength of this portfolio in {language_name}",
-    "Second specific strength of this portfolio in {language_name}",
-    "Third specific strength of this portfolio in {language_name}"
-  ],
-  "weaknesses": [
-    "First specific weakness of this portfolio in {language_name}",
-    "Second specific weakness of this portfolio in {language_name}",
-    "Third specific weakness of this portfolio in {language_name}"
-  ],
-  "recommendations": [
-    "First actionable recommendation in {language_name}",
-    "Second actionable recommendation in {language_name}",
-    "Third actionable recommendation in {language_name}"
-  ]
-}}
-
-Return ONLY the JSON object, no additional text."""
-
+  "summary": "Analysis in {language_name}",
+  "strengths": ["Strength 1", "Strength 2"],
+  "weaknesses": ["Weakness 1", "Weakness 2"],
+  "recommendations": ["Recommendation 1", "Recommendation 2"]
+}}"""
+        print(f"🔍 Prompt preview (first 200 chars): {repr(prompt[:200])}")
+        
         # Call Gemini API with client
         client = genai.Client(api_key=API_KEY)
         
@@ -2399,8 +2392,8 @@ Return ONLY the JSON object, no additional text."""
                 model="gemini-2.5-flash",
                 contents=prompt,
                 config=types.GenerateContentConfig(
-                    temperature=0.1,  # Lower temperature for more consistent JSON
-                    response_mime_type="application/json"
+                    temperature=0.0,  # Zero temperature for consistent JSON
+                    response_mime_type="text/plain"
                 )
             )
         except Exception as e:
