@@ -2337,7 +2337,10 @@ IMPORTANT: Respond in {language} language. Use proper translations for all finan
         )
         
         # Clean and parse response - robust handling of Gemini's response format
-        response_text = response.text.strip()
+        response_text = response.text
+        
+        # Debug: Log raw response
+        print(f"🔍 Raw Gemini response (first 200 chars): {repr(response_text[:200])}")
         
         # Remove markdown code blocks (```json ... ``` or ``` ... ```)
         if '```' in response_text:
@@ -2347,8 +2350,8 @@ IMPORTANT: Respond in {language} language. Use proper translations for all finan
                 # Get the middle part (between opening and closing ```)
                 response_text = parts[1]
                 # Remove language identifier if present (e.g., "json\n{...}")
-                if response_text.startswith('json'):
-                    response_text = response_text[4:]
+                if response_text.strip().startswith('json'):
+                    response_text = response_text.strip()[4:]
         
         # Remove all leading/trailing whitespace, newlines, and any non-JSON characters
         response_text = response_text.strip()
@@ -2358,11 +2361,20 @@ IMPORTANT: Respond in {language} language. Use proper translations for all finan
         end_idx = response_text.rfind('}')
         
         if start_idx == -1 or end_idx == -1:
+            print(f"❌ No JSON braces found in: {repr(response_text[:500])}")
             raise ValueError("No valid JSON object found in response")
         
         response_text = response_text[start_idx:end_idx+1]
         
-        audit_result = json.loads(response_text)
+        # Debug: Log cleaned JSON
+        print(f"🔍 Cleaned JSON (first 200 chars): {repr(response_text[:200])}")
+        
+        try:
+            audit_result = json.loads(response_text)
+        except json.JSONDecodeError as e:
+            print(f"❌ JSON Parse Error: {e}")
+            print(f"❌ Failed JSON string: {repr(response_text[:500])}")
+            raise ValueError(f"Failed to parse JSON response: {str(e)}")
         
         # Save audit to database
         audit_record = PortfolioAudit(
