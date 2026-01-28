@@ -2419,6 +2419,20 @@ IMPORTANT: Respond in {language} language. Use proper translations for all finan
             print(f"❌ Failed JSON string: {repr(response_text[:500])}")
             raise ValueError(f"Failed to parse JSON response: {str(e)}")
         
+        # Validate and sanitize audit result
+        audit_result = {
+            "portfolio_health_score": audit_result.get("portfolio_health_score", 0),
+            "diversification_score": audit_result.get("diversification_score", 0),
+            "risk_level": audit_result.get("risk_level", "UNKNOWN"),
+            "summary": audit_result.get("summary", "Analysis completed but summary not available."),
+            "sector_exposure": audit_result.get("sector_exposure", {}),
+            "correlations": audit_result.get("correlations", []),
+            "strengths": audit_result.get("strengths", []) if isinstance(audit_result.get("strengths"), list) else [],
+            "weaknesses": audit_result.get("weaknesses", []) if isinstance(audit_result.get("weaknesses"), list) else [],
+            "recommendations": audit_result.get("recommendations", []) if isinstance(audit_result.get("recommendations"), list) else [],
+            "rebalancing_suggestions": audit_result.get("rebalancing_suggestions", []) if isinstance(audit_result.get("rebalancing_suggestions"), list) else []
+        }
+        
         # Save audit to database
         audit_record = PortfolioAudit(
             user_id=current_user.id,
