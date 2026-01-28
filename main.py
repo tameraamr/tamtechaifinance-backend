@@ -1906,3 +1906,101 @@ async def get_market_sectors():
     except Exception as e:
         print(f"Global Sectors Error: {e}")
         return []
+
+
+# ==================== PUBLIC STOCK PAGE ENDPOINT (TEASER/FREEMIUM) ====================
+@app.get("/stocks/{ticker}")
+async def get_stock_page_data(
+    ticker: str,
+    lang: str = "en",
+    db: Session = Depends(get_db)
+):
+    """
+    🌐 PUBLIC SEO-FRIENDLY ENDPOINT (No Auth Required)
+    
+    Returns CACHED analysis only for SEO stock pages.
+    Shows teaser data with high-value sections BLURRED/LOCKED.
+    
+    - No AI calls (zero cost)
+    - No credit deduction
+    - Read-only cached data
+    - Returns 404 if no cache exists
+    - Freemium model: Show summary, lock premium insights
+    """
+    
+    try:
+        ticker = ticker.upper()
+        
+        # Look for cached analysis in database
+        cached_report = db.query(AnalysisReport).filter(
+            AnalysisReport.ticker == ticker,
+            AnalysisReport.language == lang
+        ).order_by(AnalysisReport.timestamp.desc()).first()
+        
+        if not cached_report:
+            raise HTTPException(
+                status_code=404, 
+                detail=f"No cached analysis available for {ticker}. Please analyze this stock first."
+            )
+        
+        # Parse cached JSON
+        cached_analysis = json.loads(cached_report.ai_json_data)
+        
+        # Fetch LIVE stock price (free, no cost)
+        try:
+            stock = yf.Ticker(ticker)
+            info = stock.info
+            current_price = info.get("currentPrice") or info.get("regularMarketPrice")
+            company_name = info.get("shortName") or info.get("longName") or ticker
+            currency = info.get("currency", "USD")
+        except:
+            # Fallback to cached price if Yahoo Finance fails
+            current_price = cached_report.price
+            company_name = ticker
+            currency = "USD"
+        
+        # Calculate cache age
+        cache_age_hours = (datetime.utcnow() - cached_report.timestamp).total_seconds() / 3600
+        
+        # TEASER MODE: Blur high-value data
+        teaser_analysis = {
+            "summary_one_line": cached_analysis.get("summary_one_line", ""),
+            "chapters": cached_analysis.get("chapters", []),
+            
+            # LOCKED FIELDS (blurred on frontend)
+            "verdict": "🔒 LOCKED",
+            "confidence_score": 0,
+            "intrinsic_value": "🔒 LOCKED",
+            "fair_value_range": "🔒 LOCKED",
+            "swot": {
+                "strengths": ["🔒 Unlock to see strengths"],
+                "weaknesses": ["🔒 Unlock to see weaknesses"],
+                "opportunities": ["🔒 Unlock to see opportunities"],
+                "threats": ["🔒 Unlock to see threats"]
+            },
+            
+            # Meta info for frontend
+            "is_teaser": True,
+            "unlock_message": "Sign in and use 1 credit to unlock the full analysis with AI verdict, intrinsic value, and SWOT insights."
+        }
+        
+        return {
+            "success": True,
+            "ticker": ticker,
+            "data": {
+                "ticker": ticker,
+                "companyName": company_name,
+                "price": current_price,
+                "currency": currency,
+                "cacheAge": f"{int(cache_age_hours)} hours ago"
+            },
+            "analysis": teaser_analysis,
+            "is_teaser": True,
+            "cache_age_hours": int(cache_age_hours)
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error fetching stock page data: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
