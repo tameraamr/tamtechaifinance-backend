@@ -1227,26 +1227,37 @@ async def get_recent_analyses(db: Session = Depends(get_db)):
 async def verify_license(request: LicenseRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user_mandatory)):
     PRODUCT_ID = "APVOhGVIRQbt7xx1qGXtPg==" 
     try:
-        # نحن نرسل الطلب لـ Gumroad لزيادة العداد
+        # Send request to Gumroad to verify and increment usage counter
         response = requests.post("https://api.gumroad.com/v2/licenses/verify",
             data={"product_id": PRODUCT_ID, "license_key": request.license_key, "increment_uses_count": "true"})
         data = response.json()
         
-        # التأكد من نجاح التحقق وعدم وجود استرجاع أموال
+        # Verify success and no refund
         if data.get("success") == True and not data.get("purchase", {}).get("refunded"):
-            # 👇 التعديل الجوهري هنا:
-            # Gumroad يرجع عدد الاستخدامات *بعد* الزيادة. 
-            # إذا كان الكود جديداً، يجب أن يكون عدد الاستخدامات (uses) يساوي 1 بالضبط.
-            # إذا كان أكثر من 1، فهذا يعني أن شخصاً آخر استخدمه قبله.
+            # Gumroad returns usage count AFTER increment
+            # If code is new, uses should equal exactly 1
+            # If more than 1, it means someone else used it before
             uses = data.get("uses") 
             
             if uses and uses > 1:
                 return {"valid": False, "message": "This key has already been redeemed."}
             
-            # إذا وصل الكود هنا، معناه أول مرة يستخدم
-            current_user.credits += 50
+            # Determine credits based on variant/price
+            purchase_info = data.get("purchase", {})
+            price = purchase_info.get("price", 0)  # Price in cents
+            variant_name = purchase_info.get("variant_name", "").lower()
+            
+            # Detect which package: 10 credits ($4.99) or 50 credits ($9.99)
+            credits_to_add = 50  # Default to 50 credits
+            if price <= 500 or "10" in variant_name or "starter" in variant_name:
+                credits_to_add = 10
+            elif price >= 900 or "50" in variant_name or "pro" in variant_name:
+                credits_to_add = 50
+            
+            # Add credits to user account
+            current_user.credits += credits_to_add
             db.commit()
-            return {"valid": True, "credits": current_user.credits}
+            return {"valid": True, "credits": current_user.credits, "credits_added": credits_to_add}
             
         return {"valid": False, "message": "Invalid license key or already used."}
     except Exception as e: 
