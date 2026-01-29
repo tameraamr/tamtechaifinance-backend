@@ -2660,37 +2660,26 @@ async def get_portfolio(
         # 🔗 UNIFIED CACHE SOURCE: Use the same get_cached_market_data() function as heatmap
         cached_data = get_cached_market_data(tickers, db)
 
+        # 🔥 FORCE IMMEDIATE SYNC: Fetch missing price data immediately for portfolio
+        missing_tickers = []
+        for ticker in tickers:
+            if ticker not in cached_data or cached_data[ticker].get('price', 0) <= 0:
+                missing_tickers.append(ticker)
+
+        if missing_tickers:
+            print(f"🔥 Portfolio: Force syncing {len(missing_tickers)} tickers with missing/zero prices: {missing_tickers}")
+            try:
+                # Fetch missing data immediately
+                missing_data = get_market_data_with_cache(missing_tickers, {'stocks': 'stocks'}, db)  # Default to stocks
+                cached_data.update(missing_data)
+                db.commit()  # Save the new data
+                print(f"✅ Portfolio force sync completed for {len(missing_data)} tickers")
+            except Exception as e:
+                print(f"❌ Portfolio force sync failed: {e}")
+
         portfolio_data = []
-        missing_tickers = []  # Track tickers that need immediate fetch
 
         for holding in holdings:
-            ticker = holding.ticker
-            cache_entry = cached_data.get(ticker)
-
-            # Use cached data if available, otherwise default to 0
-            current_price = cache_entry.get('price', 0) if cache_entry else 0
-            change_p = cache_entry.get('change_percent', 0) if cache_entry else 0
-            sector = cache_entry.get('sector') if cache_entry else None
-
-            # 🚨 URGENT FIX: If price is 0 or missing, mark for immediate background fetch
-            if current_price <= 0:
-                missing_tickers.append(ticker)
-                print(f"🚨 Portfolio: {ticker} shows ${current_price} - triggering immediate fetch")
-
-            portfolio_data.append({
-                "id": holding.id,
-                "symbol": ticker,
-                "current_price": current_price,
-                "change_p": change_p,
-                "shares": holding.quantity,
-                "avg_buy_price": holding.avg_buy_price,
-                "sector": sector
-            })
-
-        # 🔥 IMMEDIATE FETCH: If any tickers are missing/zero, trigger background update
-        if missing_tickers:
-            print(f"🔄 Portfolio: Triggering immediate background fetch for {len(missing_tickers)} missing tickers: {missing_tickers}")
-            background_tasks.add_task(update_market_data_background, missing_tickers)
 
         print(f"DEBUG: Returning {len(portfolio_data)} portfolio items to frontend")
         return portfolio_data
