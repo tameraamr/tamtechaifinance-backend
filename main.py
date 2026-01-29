@@ -207,14 +207,14 @@ def get_cached_market_data(tickers: list, db: Session) -> dict:
     """
     if not tickers:
         return {}
-    
-    # Query cache for valid data (less than 10 minutes old)
-    ten_minutes_ago = datetime.now() - timedelta(minutes=10)
+
+    # CRITICAL FIX: Use UTC time to match database timestamps (func.now() uses UTC)
+    ten_minutes_ago = datetime.utcnow() - timedelta(minutes=10)
     cached_data = db.query(MarketDataCache).filter(
         MarketDataCache.ticker.in_(tickers),
         MarketDataCache.last_updated >= ten_minutes_ago
     ).all()
-    
+
     return {item.ticker: {
         'name': item.name,
         'price': item.price,
@@ -310,7 +310,7 @@ def update_market_cache(tickers_data: dict, db: Session):
                 existing.market_cap = data['market_cap']
                 existing.volume = data['volume']
                 existing.asset_type = data['asset_type']
-                existing.last_updated = datetime.now()
+                existing.last_updated = datetime.utcnow()  # CRITICAL FIX: Use UTC time
             else:
                 # Create new
                 cache_entry = MarketDataCache(
@@ -367,6 +367,22 @@ def get_market_data_with_cache(tickers: list, asset_types: dict = None, db: Sess
 
     # Get cached data
     cached_data = get_cached_market_data(tickers, db)
+
+    # CRITICAL FIX: Strict Guard Clause - Return cached data immediately if all data is fresh
+    # This prevents ANY API calls when cache is valid (within 10 minutes)
+    if cached_data and len(cached_data) == len(tickers) and not force_fresh and not stale_while_revalidate:
+        # Verify all cached data is actually fresh (double-check the 10-minute rule)
+        current_time = datetime.utcnow()
+        all_fresh = True
+        for ticker_data in cached_data.values():
+            last_updated = ticker_data.get('last_updated')
+            if not last_updated or (current_time - last_updated).total_seconds() >= 600:  # 10 minutes
+                all_fresh = False
+                break
+
+        if all_fresh:
+            print(f"✅ CACHE HIT: Serving {len(tickers)} tickers from cache (no API calls)")
+            return cached_data
 
     # Find tickers that need fresh data
     tickers_needing_fresh = []
