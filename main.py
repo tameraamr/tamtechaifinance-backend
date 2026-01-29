@@ -201,25 +201,33 @@ else:
 
 # --- Global Market Data Caching Engine ---
 
-def get_cached_market_data(tickers: list, db: Session) -> dict:
+def get_cached_market_data(tickers: list, db: Session, include_expired: bool = False) -> dict:
     """
     Get cached market data for tickers. Returns dict with ticker -> data mapping.
-    Only returns data that's less than 10 minutes old.
+    Only returns data that's less than 10 minutes old unless include_expired=True.
     If tickers is empty, returns all cached data.
     """
     # CRITICAL FIX: Use UTC time to match database timestamps (func.now() uses UTC)
     ten_minutes_ago = datetime.utcnow() - timedelta(minutes=10)
-    
+
     if tickers:
-        cached_data = db.query(MarketDataCache).filter(
-            MarketDataCache.ticker.in_(tickers),
-            MarketDataCache.last_updated >= ten_minutes_ago
-        ).all()
+        if include_expired:
+            cached_data = db.query(MarketDataCache).filter(
+                MarketDataCache.ticker.in_(tickers)
+            ).all()
+        else:
+            cached_data = db.query(MarketDataCache).filter(
+                MarketDataCache.ticker.in_(tickers),
+                MarketDataCache.last_updated >= ten_minutes_ago
+            ).all()
     else:
         # Return all cached data if no tickers specified
-        cached_data = db.query(MarketDataCache).filter(
-            MarketDataCache.last_updated >= ten_minutes_ago
-        ).all()
+        if include_expired:
+            cached_data = db.query(MarketDataCache).all()
+        else:
+            cached_data = db.query(MarketDataCache).filter(
+                MarketDataCache.last_updated >= ten_minutes_ago
+            ).all()
 
     return {item.ticker: {
         'name': item.name,
@@ -2475,47 +2483,50 @@ async def get_portfolio(
 ):
     """
     📊 GET USER PORTFOLIO (FREE FEATURE)
-    Returns all holdings with live prices using LEFT JOIN.
+    Returns all holdings with live prices using unified cache source.
     """
     try:
         print(f"Portfolio request for user {current_user.id}")
-        
-        # LEFT JOIN using raw SQL for simplicity
-        from sqlalchemy import text
-        query = text("""
-            SELECT ph.id, ph.ticker, ph.quantity, mdc.price, mdc.change_percent, mdc.sector
-            FROM portfolio_holdings ph
-            LEFT JOIN market_data_cache mdc ON ph.ticker = mdc.ticker
-            WHERE ph.user_id = :user_id
-        """)
-        
-        result = db.execute(query, {"user_id": current_user.id})
-        holdings_data = result.fetchall()
-        
-        print(f"DEBUG: Found {len(holdings_data)} holdings in portfolio_holdings for user {current_user.id}")
-        
+
+        # Get user's portfolio holdings
+        holdings = db.query(PortfolioHolding).filter(
+            PortfolioHolding.user_id == current_user.id
+        ).all()
+
+        print(f"DEBUG: Found {len(holdings)} holdings in portfolio_holdings for user {current_user.id}")
+
+        if not holdings:
+            return []
+
+        # Extract tickers for cache lookup
+        tickers = [holding.ticker for holding in holdings]
+
+        # 🔗 UNIFIED CACHE SOURCE: Use the same get_cached_market_data() function as heatmap
+        cached_data = get_cached_market_data(tickers, db)
+
         portfolio_data = []
-        
-        for row in holdings_data:
-            id = row[0]  # id
-            ticker = row[1]  # ticker
-            shares = row[2]  # quantity
-            current_price = row[3] if row[3] is not None else 0  # price from cache or 0
-            change_p = row[4] if row[4] is not None else 0  # change_percent from cache or 0
-            sector = row[5]  # sector from cache (may be None)
-            
+
+        for holding in holdings:
+            ticker = holding.ticker
+            cache_entry = cached_data.get(ticker)
+
+            # Use cached data if available, otherwise default to 0
+            current_price = cache_entry.get('price', 0) if cache_entry else 0
+            change_p = cache_entry.get('change_percent', 0) if cache_entry else 0
+            sector = cache_entry.get('sector') if cache_entry else None
+
             portfolio_data.append({
-                "id": id,
+                "id": holding.id,
                 "symbol": ticker,
                 "current_price": current_price,
                 "change_p": change_p,
-                "shares": shares,
+                "shares": holding.quantity,
                 "sector": sector
             })
-        
+
         print(f"DEBUG: Returning {len(portfolio_data)} portfolio items to frontend")
         return portfolio_data
-        
+
     except Exception as e:
         print(f"Portfolio error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -2646,7 +2657,8 @@ async def get_master_universe_heatmap(background_tasks: BackgroundTasks, db: Ses
     🌍 MASTER UNIVERSE HEATMAP (FREE FEATURE)
     Returns market data for 100+ assets across stocks, crypto, commodities, and forex.
     Uses intelligent caching with 10-minute validity and batch fetching.
-    TRULY NON-BLOCKING: Returns cached data instantly, updates in background.
+    ATOMIC UPDATES: Never serves partial data - waits for complete cache or uses last full valid cache.
+    STALE-WHILE-REVALIDATE: Always serves data, updates in background.
     """
     try:
         # 🎯 MASTER UNIVERSE - 100+ ASSETS ACROSS MULTIPLE CLASSES
@@ -2686,25 +2698,40 @@ async def get_master_universe_heatmap(background_tasks: BackgroundTasks, db: Ses
                 all_tickers.append(ticker)
                 asset_types[ticker] = asset_class
 
-        # 🚀 TRULY NON-BLOCKING: Get cached data instantly (no API calls)
+        # 🚀 STALE-WHILE-REVALIDATE: Always return data, update in background
         cached_data = get_cached_market_data(all_tickers, db)
 
-        # Check if we need background updates (only if some data is missing or expired)
+        # Check data completeness
         current_time = datetime.utcnow()
-        needs_update = False
+        complete_data = len(cached_data) == len(all_tickers)
+        needs_update = not complete_data
 
-        for ticker in all_tickers:
-            if ticker not in cached_data:
-                needs_update = True
-                break
-            last_updated = cached_data[ticker].get('last_updated')
-            if not last_updated or (current_time - last_updated).total_seconds() >= 600:  # 10 minutes
-                needs_update = True
-                break
+        # Check for expired data if we have complete data
+        if complete_data:
+            for ticker in all_tickers:
+                if ticker in cached_data:
+                    last_updated = cached_data[ticker].get('last_updated')
+                    if not last_updated or (current_time - last_updated).total_seconds() >= 600:  # 10 minutes
+                        needs_update = True
+                        break
 
-        # 🔥 BACKGROUND UPDATE: Only trigger if cache needs refresh
+        # 🔥 BACKGROUND UPDATE: Trigger if needed
         if needs_update:
             background_tasks.add_task(update_heatmap_cache_background, all_tickers, asset_types)
+
+        # 🛡️ ATOMIC UPDATES: If we don't have complete data, try to get the last full valid cache
+        if not complete_data:
+            print(f"⚠️ Incomplete cache ({len(cached_data)}/{len(all_tickers)} items), checking for last full cache...")
+
+            # Try to get all cached data (even expired) as fallback
+            fallback_data = get_cached_market_data([], db, include_expired=True)  # Empty list = get all, include expired
+
+            # Check if fallback has all tickers (even if expired)
+            if len(fallback_data) >= len(all_tickers) * 0.9:  # At least 90% coverage
+                print(f"✅ Using fallback cache with {len(fallback_data)} items")
+                cached_data = fallback_data
+            else:
+                print(f"❌ No sufficient fallback cache available, returning partial data")
 
         # Organize response by asset class using cached data
         heatmap_data = {
@@ -2712,11 +2739,15 @@ async def get_master_universe_heatmap(background_tasks: BackgroundTasks, db: Ses
             "crypto": [],
             "commodities": [],
             "forex": [],
-            "last_updated": datetime.utcnow().isoformat()
+            "last_updated": datetime.utcnow().isoformat(),
+            "cache_status": "complete" if complete_data else "partial"
         }
 
         for ticker, data in cached_data.items():
-            asset_class = data.get('asset_type', 'stocks')
+            if ticker not in asset_types:
+                continue  # Skip tickers not in our universe
+
+            asset_class = asset_types[ticker]
 
             # Format for heatmap display - STRIPPED TO ESSENTIALS ONLY
             heatmap_item = {
@@ -2731,11 +2762,12 @@ async def get_master_universe_heatmap(background_tasks: BackgroundTasks, db: Ses
 
         # Sort each asset class by absolute change percentage (most volatile first)
         for asset_class in heatmap_data:
-            if asset_class != "last_updated":
-                heatmap_data[asset_class].sort(key=lambda x: abs(x.get('change_percent', 0)), reverse=True)
+            if asset_class not in ["last_updated", "cache_status"]:
+                heatmap_data[asset_class].sort(key=lambda x: abs(x.get('c', 0)), reverse=True)
 
+        print(f"🌍 Heatmap: Returning {sum(len(v) for k, v in heatmap_data.items() if k not in ['last_updated', 'cache_status'])} items ({heatmap_data['cache_status']})")
         return heatmap_data
-        
+
     except Exception as e:
         print(f"❌ Master Universe Heatmap Error: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch market data: {str(e)}")
