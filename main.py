@@ -354,24 +354,7 @@ def get_market_data_with_cache(tickers: list, asset_types: dict = None, db: Sess
     if not tickers:
         return {}
 
-    # URGENT FIX 1: Check if DB is completely empty - force blocking initial fetch
-    if db:
-        cache_count = db.query(MarketDataCache).count()
-        db_is_empty = cache_count == 0
-        if db_is_empty:
-            print("🚨 DB IS EMPTY - Forcing blocking initial fetch for all tickers")
-            # Block and wait for live fetch
-            fresh_data = batch_fetch_market_data(tickers, asset_types)
-            valid_fresh_data = {
-                ticker: data for ticker, data in fresh_data.items()
-                if data.get('price', 0) > 0 and data.get('success', False)
-            }
-            # Update cache synchronously for initial population
-            if valid_fresh_data:
-                update_market_cache(valid_fresh_data, db)
-            return valid_fresh_data
-
-    # Get cached data
+    # Get cached data - always instant, background updates handle fresh data
     cached_data = get_cached_market_data(tickers, db)
 
     # CRITICAL FIX: Strict Guard Clause - Return cached data immediately if all data is fresh
@@ -1760,12 +1743,9 @@ def get_market_pulse(db: Session = Depends(get_db)):
             "GC=F": "GOLD"
         }
 
-        # URGENT FIX 3: Enable Stale-While-Revalidate for navbar speed
-        # Show last saved price immediately, but trigger background update
-        market_data = get_market_data_with_cache(list(tickers.keys()), {
-            "^GSPC": "stock", "^IXIC": "stock", "NVDA": "stock",
-            "BTC-USD": "crypto", "GC=F": "commodity"
-        }, db, stale_while_revalidate=True)
+        # URGENT FIX 3: Use CACHE ONLY for instant response - no API calls
+        # Show cached data immediately, no background updates for live-bar
+        market_data = get_cached_market_data(list(tickers.keys()), db)
 
         pulse_data = []
         for sym, name in tickers.items():
