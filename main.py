@@ -1995,13 +1995,15 @@ def get_market_winners_losers():
         # Get S&P 500 components (top 100 for performance)
         sp500 = yf.Ticker("^GSPC")
         sp500_components = []
-        
+        print("[DEBUG] Fetching S&P 500 components...")
         try:
             # Try to get components from yfinance
             components = sp500.info.get('components', [])
+            print(f"[DEBUG] yfinance components: {components[:10]}")
             if components:
                 sp500_components = components[:100]  # Limit to 100 for performance
-        except:
+        except Exception as e:
+            print(f"[DEBUG] Exception fetching components from yfinance: {e}")
             # Fallback to hardcoded major stocks
             sp500_components = [
                 "AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "META", "NFLX", "BABA", "ORCL",
@@ -2017,24 +2019,26 @@ def get_market_winners_losers():
             ]
         
         if not sp500_components:
+            print("[DEBUG] No S&P 500 components found!")
             return {"winners": [], "losers": [], "error": "Unable to fetch market data"}
-        
+
+        print(f"[DEBUG] S&P 500 components to fetch: {sp500_components[:10]}")
         # Use cached market data instead of individual API calls
         tickers_to_fetch = sp500_components[:50]  # Limit to 50 for API rate limits
         cached_data = get_market_data_with_cache(tickers_to_fetch)
-        
+        print(f"[DEBUG] Cached data keys: {list(cached_data.keys())[:10]}")
+
         performance_data = []
-        
+
         for ticker in tickers_to_fetch:
             if ticker in cached_data and cached_data[ticker]:
                 data = cached_data[ticker]
                 current_price = data.get('price', 0)
                 prev_close = data.get('previous_close', 0)
-                
+                print(f"[DEBUG] {ticker}: price={current_price}, prev_close={prev_close}")
                 if prev_close > 0 and current_price > 0:
                     change_percent = ((current_price - prev_close) / prev_close) * 100
                     volume = data.get('volume', 0)
-                    
                     performance_data.append({
                         "ticker": ticker,
                         "name": data.get("company_name", ticker),
@@ -2043,11 +2047,14 @@ def get_market_winners_losers():
                         "volume": volume,
                         "market_cap": data.get("market_cap", 0)
                     })
-        
+
+        print(f"[DEBUG] Performance data count: {len(performance_data)}")
         # Sort by performance
         winners = sorted(performance_data, key=lambda x: x["change_percent"], reverse=True)[:10]
         losers = sorted(performance_data, key=lambda x: x["change_percent"])[:10]
-        
+
+        print(f"[DEBUG] Winners: {winners}")
+        print(f"[DEBUG] Losers: {losers}")
         return {
             "winners": winners,
             "losers": losers,
