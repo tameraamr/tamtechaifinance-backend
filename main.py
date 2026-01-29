@@ -349,11 +349,14 @@ def update_market_cache(tickers_data: dict, db: Session):
         print(f"❌ Error committing cache updates: {e}")
         db.rollback()
 
-def get_market_data_with_cache(tickers: list, asset_types: dict = None, db: Session = None) -> dict:
+def get_market_data_with_cache(tickers: list, asset_types: dict = None, db: Session = None, force_fresh: bool = False, stale_while_revalidate: bool = False) -> dict:
     """
     Main function: Get market data with intelligent caching.
     - Check cache first (10-minute validity)
     - Force fresh fetch for invalid cached data (price=0 or None)
+    - URGENT FIX: If DB is empty, BLOCK and wait for live fetch
+    - URGENT FIX: If price == 0, bypass_cache_and_fetch_live()
+    - URGENT FIX: Stale-while-revalidate mode for navbar speed
     - Batch fetch missing/expired data
     - Update cache asynchronously
     - Return complete dataset
@@ -361,20 +364,45 @@ def get_market_data_with_cache(tickers: list, asset_types: dict = None, db: Sess
     if not tickers:
         return {}
 
+    # URGENT FIX 1: Check if DB is completely empty - force blocking initial fetch
+    if db:
+        cache_count = db.query(MarketDataCache).count()
+        db_is_empty = cache_count == 0
+        if db_is_empty:
+            print("🚨 DB IS EMPTY - Forcing blocking initial fetch for all tickers")
+            # Block and wait for live fetch
+            fresh_data = batch_fetch_market_data(tickers, asset_types)
+            valid_fresh_data = {
+                ticker: data for ticker, data in fresh_data.items()
+                if data.get('price', 0) > 0 and data.get('success', False)
+            }
+            # Update cache synchronously for initial population
+            if valid_fresh_data:
+                update_market_cache(valid_fresh_data, db)
+            return valid_fresh_data
+
     # Get cached data
     cached_data = get_cached_market_data(tickers, db)
 
-    # Find tickers that need fresh data (missing OR invalid cached data)
+    # Find tickers that need fresh data
     tickers_needing_fresh = []
     valid_cached_data = {}
 
     for ticker in tickers:
-        if ticker not in cached_data:
+        if force_fresh:
+            # Force fresh fetch for all tickers
+            tickers_needing_fresh.append(ticker)
+        elif ticker not in cached_data:
             # Missing from cache
             tickers_needing_fresh.append(ticker)
         elif cached_data[ticker].get('price', 0) <= 0:
-            # Invalid cached data (price is 0 or negative)
+            # URGENT FIX 2: Invalid cached data (price is 0 or negative) - bypass cache
+            print(f"🚨 INVALID CACHE: {ticker} has price ${cached_data[ticker].get('price', 0)} - bypassing cache")
             tickers_needing_fresh.append(ticker)
+        elif stale_while_revalidate:
+            # Stale-while-revalidate: return cached data but trigger background update
+            valid_cached_data[ticker] = cached_data[ticker]
+            tickers_needing_fresh.append(ticker)  # Still fetch fresh in background
         else:
             # Valid cached data
             valid_cached_data[ticker] = cached_data[ticker]
@@ -389,18 +417,22 @@ def get_market_data_with_cache(tickers: list, asset_types: dict = None, db: Sess
             if data.get('price', 0) > 0 and data.get('success', False)
         }
 
-        # Update cache with valid fresh data asynchronously
+        # Update cache with valid fresh data
         if valid_fresh_data and db:
-            try:
-                # Use background task for cache update to avoid blocking response
-                import threading
-                def update_cache_async():
+            if stale_while_revalidate:
+                # Async update for stale-while-revalidate
+                try:
+                    import threading
+                    def update_cache_async():
+                        update_market_cache(valid_fresh_data, db)
+                    thread = threading.Thread(target=update_cache_async, daemon=True)
+                    thread.start()
+                    print(f"🔄 Stale-while-revalidate: Updated {len(valid_fresh_data)} tickers in background")
+                except Exception as e:
+                    print(f"⚠️ Async cache update failed: {e}")
                     update_market_cache(valid_fresh_data, db)
-                thread = threading.Thread(target=update_cache_async, daemon=True)
-                thread.start()
-            except Exception as e:
-                print(f"⚠️ Async cache update failed: {e}")
-                # Fallback to synchronous update if threading fails
+            else:
+                # Synchronous update for critical data
                 update_market_cache(valid_fresh_data, db)
 
         # Merge valid fresh data with valid cached data
@@ -1692,11 +1724,12 @@ def get_market_pulse(db: Session = Depends(get_db)):
             "GC=F": "GOLD"
         }
 
-        # Get data from cache
+        # URGENT FIX 3: Enable Stale-While-Revalidate for navbar speed
+        # Show last saved price immediately, but trigger background update
         market_data = get_market_data_with_cache(list(tickers.keys()), {
             "^GSPC": "stock", "^IXIC": "stock", "NVDA": "stock",
             "BTC-USD": "crypto", "GC=F": "commodity"
-        }, db)
+        }, db, stale_while_revalidate=True)
 
         pulse_data = []
         for sym, name in tickers.items():
@@ -2646,8 +2679,54 @@ async def get_master_universe_heatmap(db: Session = Depends(get_db)):
 
 # ==================== SERVER STARTUP ====================
 
+def warmup_cache_on_startup():
+    """
+    URGENT FIX 4: Batch warm-up - fetch top 100 assets on server startup
+    This ensures cache is 'warm' before first user visits, preventing $0 displays
+    """
+    print("🔥 Warming up cache with top 100 assets...")
+
+    try:
+        # Create database session
+        db = SessionLocal()
+
+        # Top 100 assets from our ticker pool (first 100)
+        top_100_tickers = TICKER_POOL[:100]
+
+        # Asset type mapping for proper data fetching
+        asset_types = {ticker: 'stock' for ticker in top_100_tickers}
+
+        print(f"📊 Fetching {len(top_100_tickers)} assets for cache warm-up...")
+
+        # Force fresh fetch for all tickers (bypass cache completely for warm-up)
+        market_data = get_market_data_with_cache(
+            top_100_tickers,
+            asset_types,
+            db,
+            force_fresh=True  # Force fresh fetch for all
+        )
+
+        # Count successful fetches
+        successful_fetches = sum(1 for data in market_data.values() if data.get('price', 0) > 0)
+
+        print(f"✅ Cache warm-up complete: {successful_fetches}/{len(top_100_tickers)} assets cached")
+        print("💾 Cache is now WARM - ready for user requests!")
+
+        db.close()
+
+    except Exception as e:
+        print(f"❌ Cache warm-up failed: {e}")
+        try:
+            db.close()
+        except:
+            pass
+
 if __name__ == "__main__":
     import uvicorn
+
+    # URGENT FIX 4: Run cache warm-up before starting server
+    warmup_cache_on_startup()
+
     print("🚀 Starting TamtechAI Finance Tool Backend...")
     print("📊 Master Universe Heatmap: ENABLED")
     print("💾 Global Caching Engine: ACTIVE")
