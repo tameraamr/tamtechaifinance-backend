@@ -233,6 +233,9 @@ def batch_fetch_market_data(tickers: list, asset_types: dict = None) -> dict:
     if not tickers:
         return {}
 
+    # Log batch request size
+    print(f"🔄 API Batch Request Sent for {len(tickers)} items: {', '.join(tickers[:5])}{'...' if len(tickers) > 5 else ''}")
+
     data = {}
 
     for ticker in tickers:
