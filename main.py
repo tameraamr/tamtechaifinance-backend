@@ -357,21 +357,11 @@ def get_market_data_with_cache(tickers: list, asset_types: dict = None, db: Sess
     # Get cached data - always instant, background updates handle fresh data
     cached_data = get_cached_market_data(tickers, db)
 
-    # CRITICAL FIX: Strict Guard Clause - Return cached data immediately if all data is fresh
-    # This prevents ANY API calls when cache is valid (within 10 minutes)
-    if cached_data and len(cached_data) == len(tickers) and not force_fresh and not stale_while_revalidate:
-        # Verify all cached data is actually fresh (double-check the 10-minute rule)
-        current_time = datetime.utcnow()
-        all_fresh = True
-        for ticker_data in cached_data.values():
-            last_updated = ticker_data.get('last_updated')
-            if not last_updated or (current_time - last_updated).total_seconds() >= 600:  # 10 minutes
-                all_fresh = False
-                break
-
-        if all_fresh:
-            print(f"✅ CACHE HIT: Serving {len(tickers)} tickers from cache (no API calls)")
-            return cached_data
+    # CRITICAL FIX: Return cached data immediately if all tickers are in cache
+    # This prevents ANY API calls when data exists in cache, regardless of freshness
+    if cached_data and len(cached_data) == len(tickers) and not force_fresh:
+        print(f"✅ CACHE HIT: Serving {len(tickers)} tickers from cache (no API calls)")
+        return cached_data
 
     # Find tickers that need fresh data
     tickers_needing_fresh = []
@@ -2419,8 +2409,8 @@ async def get_portfolio(
         # Collect all tickers for batch fetching
         tickers = [holding.ticker for holding in holdings]
         
-        # Fetch all prices from cache
-        cached_data = get_market_data_with_cache(tickers) if tickers else {}
+        # Fetch all prices from cache - instant response with background updates
+        cached_data = get_market_data_with_cache(tickers, stale_while_revalidate=True) if tickers else {}
         
         portfolio_data = []
         total_value = 0
@@ -2469,7 +2459,8 @@ async def get_portfolio(
                 "pnl_percent": pnl_percent,
                 "sector": sector,
                 "industry": industry,
-                "price_error": price_error
+                "price_error": price_error,
+                "last_updated": data.get("last_updated") if data else None
             })
         
         total_pnl = total_value - total_cost
