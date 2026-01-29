@@ -288,58 +288,167 @@ def update_market_data_background(tickers: list):
     finally:
         db.close()
 
-def batch_fetch_market_data(tickers: list, asset_types: dict = None, chunk_size: int = 50) -> dict:
+def get_ticker_sector(ticker: str, info: dict) -> str:
     """
-    Batch fetch market data - using individual calls for reliability.
-    Now supports chunked fetching to prevent timeouts with large batches.
-    Updates cache with fresh data.
+    Intelligent sector mapping for tickers.
+    Uses Yahoo Finance data first, then falls back to ticker-based classification.
+    """
+    # First try Yahoo Finance sector
+    yahoo_sector = info.get("sector")
+    if yahoo_sector:
+        return yahoo_sector.title()
+
+    # Fallback: Classify based on ticker patterns and characteristics
+    ticker_upper = ticker.upper()
+
+    # ETF Classification based on common patterns
+    if any(etf_pattern in ticker_upper for etf_pattern in ['.AS', '.DE', '.L', '.PA', '.MI', '.BR', '.LS', '.MC', '.VI']):
+        # European ETFs - classify by ticker prefix
+        if ticker_upper.startswith(('VWCE', 'VWRD', 'VEUR', 'VUSA', 'VFEM', 'VJPN', 'VWO')):
+            return 'ETF - Global Equity'
+        elif ticker_upper.startswith(('CSPX', 'VUSA', 'EQQQ', 'NQSE')):
+            return 'ETF - US Equity'
+        elif ticker_upper.startswith(('VEUR', 'VGER')):
+            return 'ETF - European Equity'
+        elif ticker_upper.startswith(('VFEM', 'VHYL')):
+            return 'ETF - Emerging Markets'
+        elif ticker_upper.startswith(('VIG', 'VHYG')):
+            return 'ETF - Bonds'
+        elif ticker_upper.startswith(('IBTL', 'IBTM')):
+            return 'ETF - Bonds'
+        else:
+            return 'ETF - Mixed Assets'
+
+    # US ETF Classification
+    elif ticker_upper.endswith(('ETF', 'FUND')) or len(ticker_upper) > 5:
+        # Common US ETF patterns
+        if ticker_upper.startswith(('SPY', 'VOO', 'IVV', 'QQQ', 'IWM')):
+            return 'ETF - US Equity'
+        elif ticker_upper.startswith(('EFA', 'VEA', 'VXUS', 'VWO')):
+            return 'ETF - International Equity'
+        elif ticker_upper.startswith(('BND', 'AGG', 'TLT', 'IEF')):
+            return 'ETF - Bonds'
+        elif ticker_upper.startswith(('GLD', 'SLV', 'IAU')):
+            return 'ETF - Commodities'
+        else:
+            return 'ETF - Mixed Assets'
+
+    # Crypto Classification
+    elif ticker_upper in ['BTC-USD', 'ETH-USD', 'BNB-USD', 'ADA-USD', 'SOL-USD', 'DOT-USD', 'DOGE-USD', 'AVAX-USD', 'LTC-USD', 'MATIC-USD']:
+        return 'Cryptocurrency'
+
+    # Commodity Classification
+    elif ticker_upper in ['GC=F', 'SI=F', 'CL=F', 'NG=F', 'HG=F', 'PL=F', 'ALI=F', 'ZC=F', 'ZW=F', 'ZS=F', 'ZM=F', 'ZL=F', 'ZO=F', 'ZR=F', 'KE=F', 'CC=F', 'KC=F', 'CT=F', 'SB=F']:
+        return 'Commodities'
+
+    # Forex Classification
+    elif any(ticker_upper.endswith(pair) for pair in ['=X', 'USD=X', 'EUR=X', 'GBP=X', 'JPY=X', 'CAD=X', 'AUD=X', 'CHF=X', 'CNY=X', 'INR=X']):
+        return 'Currency'
+
+    # Individual Stock Classification (fallback)
+    else:
+        # Try to infer from company name or other info
+        industry = info.get("industry", "").lower()
+        if industry:
+            # Map common industries to sectors
+            industry_sector_map = {
+                'software': 'Technology',
+                'internet': 'Technology',
+                'semiconductor': 'Technology',
+                'computer': 'Technology',
+                'pharmaceutical': 'Healthcare',
+                'biotechnology': 'Healthcare',
+                'medical': 'Healthcare',
+                'bank': 'Financial Services',
+                'financial': 'Financial Services',
+                'insurance': 'Financial Services',
+                'automotive': 'Consumer Cyclical',
+                'retail': 'Consumer Defensive',
+                'beverage': 'Consumer Defensive',
+                'food': 'Consumer Defensive',
+                'energy': 'Energy',
+                'oil': 'Energy',
+                'gas': 'Energy',
+                'industrial': 'Industrials',
+                'manufacturing': 'Industrials',
+                'aerospace': 'Industrials',
+                'defense': 'Industrials',
+                'real estate': 'Real Estate',
+                ' REIT': 'Real Estate',
+                'materials': 'Basic Materials',
+                'chemical': 'Basic Materials',
+                'mining': 'Basic Materials',
+                'utilities': 'Utilities',
+                'telecommunication': 'Communication Services',
+                'media': 'Communication Services',
+                'entertainment': 'Communication Services'
+            }
+
+            for key, sector in industry_sector_map.items():
+                if key in industry:
+                    return sector
+
+        # Final fallback
+        return 'Unknown'
+
+def batch_fetch_market_data(tickers: list, asset_types: dict = None):
+    """
+    Batch fetch market data for multiple tickers with intelligent sector mapping.
+    Returns dict with ticker -> data mapping for cache storage.
     """
     if not tickers:
         return {}
 
-    # Log batch request size
-    print(f"🔄 API Batch Request Sent for {len(tickers)} items: {', '.join(tickers[:5])}{'...' if len(tickers) > 5 else ''}")
+    results = {}
+    chunk_size = 10  # Process in chunks to avoid rate limits
 
-    data = {}
-
-    # Process tickers in chunks to prevent timeouts
     for i in range(0, len(tickers), chunk_size):
         chunk = tickers[i:i + chunk_size]
-        print(f"📦 Processing chunk {i//chunk_size + 1} of {(len(tickers) + chunk_size - 1)//chunk_size}: {len(chunk)} tickers")
+        print(f"📊 Fetching batch {i//chunk_size + 1}/{(len(tickers) + chunk_size - 1)//chunk_size}: {chunk}")
 
+        # Fetch data for this chunk
         for ticker in chunk:
             try:
-                # Use individual ticker objects for reliability
-                stock = yf.Ticker(ticker)
-                info = stock.info
-
-                # Extract data based on asset type
+                # Determine asset type
                 asset_type = asset_types.get(ticker, 'stock') if asset_types else 'stock'
 
-                current_price = info.get("currentPrice") or info.get("regularMarketPrice") or info.get("previousClose") or 0
-                previous_close = info.get("previousClose") or current_price
+                # Fetch data using yfinance
+                stock = yf.Ticker(ticker)
 
-                # Calculate 24h change percentage
-                if previous_close and previous_close > 0:
-                    change_percent = ((current_price - previous_close) / previous_close) * 100
-                else:
-                    change_percent = 0
+                # Get basic info
+                info = stock.info
+                current_price = None
 
-                # Get name based on asset type
-                if asset_type == 'crypto':
-                    name = info.get("name", ticker.upper())
-                elif asset_type == 'commodity':
-                    name = info.get("shortName", ticker.upper())
-                elif asset_type == 'forex':
-                    name = f"{ticker[:3]}/{ticker[3:]}"
-                else:  # stock
-                    name = info.get("shortName") or info.get("longName") or ticker.upper()
+                # Try multiple ways to get current price
+                try:
+                    current_price = stock.fast_info['last_price']
+                except:
+                    current_price = info.get('currentPrice') or info.get('regularMarketPrice')
 
-                market_cap = info.get("marketCap")
-                volume = info.get("volume") or info.get("averageVolume")
-                sector = info.get("sector") if asset_type == 'stock' else None
+                if not current_price or current_price <= 0:
+                    print(f"⚠️ No valid price for {ticker}, skipping")
+                    continue
 
-                data[ticker] = {
+                # Get change percentage
+                change_percent = 0
+                try:
+                    prev_close = info.get('previousClose') or info.get('regularMarketPreviousClose')
+                    if prev_close and prev_close > 0:
+                        change_percent = ((current_price - prev_close) / prev_close) * 100
+                except:
+                    pass
+
+                # Get sector using our intelligent mapping
+                sector = get_ticker_sector(ticker, info)
+
+                # Get market cap and volume
+                market_cap = info.get('marketCap', 0)
+                volume = info.get('volume') or info.get('averageVolume', 0)
+
+                # Get company name
+                name = info.get('longName') or info.get('shortName') or ticker
+
+                results[ticker] = {
                     'name': name,
                     'price': current_price,
                     'change_percent': change_percent,
@@ -347,23 +456,32 @@ def batch_fetch_market_data(tickers: list, asset_types: dict = None, chunk_size:
                     'market_cap': market_cap,
                     'volume': volume,
                     'asset_type': asset_type,
-                    'success': current_price > 0
+                    'success': True
                 }
 
+                print(f"✅ {ticker}: ${current_price:.2f} ({change_percent:+.2f}%) - {sector}")
+
             except Exception as e:
-                print(f"❌ Error fetching {ticker}: {e}")
-                data[ticker] = {
-                    'name': ticker.upper(),
+                print(f"❌ Failed to fetch {ticker}: {e}")
+                # Return minimal data for failed fetches to avoid breaking cache
+                results[ticker] = {
+                    'name': ticker,
                     'price': 0,
                     'change_percent': 0,
-                    'sector': None,
-                    'market_cap': None,
-                    'volume': None,
+                    'sector': 'Unknown',
+                    'market_cap': 0,
+                    'volume': 0,
                     'asset_type': asset_types.get(ticker, 'stock') if asset_types else 'stock',
                     'success': False
                 }
 
-    return data
+        # Small delay between chunks to be respectful to Yahoo Finance
+        if i + chunk_size < len(tickers):
+            import time
+            time.sleep(0.5)
+
+    print(f"📊 Batch fetch completed: {len(results)}/{len(tickers)} tickers processed")
+    return results
 
 def update_market_cache(tickers_data: dict, db: Session):
     """
@@ -2544,6 +2662,7 @@ async def get_portfolio(
                 "current_price": current_price,
                 "change_p": change_p,
                 "shares": holding.quantity,
+                "avg_buy_price": holding.avg_buy_price,
                 "sector": sector
             })
 
