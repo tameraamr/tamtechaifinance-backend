@@ -247,7 +247,7 @@ def get_cached_market_data(tickers: list, db: Session, include_expired: bool = F
         'market_cap': item.market_cap,
         'volume': item.volume,
         'asset_type': item.asset_type,
-        'last_updated': item.last_updated
+        'last_updated': item.last_updated.replace(tzinfo=UTC) if item.last_updated else None
     } for item in cached_data}
 
 def get_cached_market_data_with_background_update(tickers: list, db: Session, background_tasks: BackgroundTasks) -> dict:
@@ -2006,7 +2006,7 @@ def get_market_winners_losers():
             sp500_components = [
                 "AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "META", "NFLX", "BABA", "ORCL",
                 "CRM", "AMD", "INTC", "CSCO", "ADBE", "PYPL", "UBER", "SPOT", "ZM", "SHOP",
-                "SQ", "COIN", "PLTR", "SNOW", "CRWD", "ZS", "OKTA", "DDOG", "NET", "DOCU",
+                "COIN", "PLTR", "SNOW", "CRWD", "ZS", "OKTA", "DDOG", "NET", "DOCU",
                 "TWLO", "FSLY", "ETSY", "PINS", "ROKU", "FUBO", "SE", "BIDU", "JD", "NTES",
                 "TCEHY", "BILI", "IQ", "VIPS", "WB", "YY", "HUYA", "BZUN", "MOMO", "ATHM",
                 "XPEV", "LI", "NIO", "BYDDF", "TSM", "ASML", "QCOM", "TXN", "AVGO", "MU",
@@ -2051,7 +2051,7 @@ def get_market_winners_losers():
         return {
             "winners": winners,
             "losers": losers,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now(UTC).isoformat()
         }
         
     except Exception as e:
@@ -2835,8 +2835,8 @@ async def get_master_universe_heatmap(background_tasks: BackgroundTasks, db: Ses
             "stocks": [
                 "SPY", "QQQ", "IWM", "VTI", "VXUS", "BND", "VEA", "VWO", "VIG", "VUG",
                 "AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "META", "NFLX", "AMD", "INTC",
-                "JPM", "BAC", "WFC", "GS", "MS", "V", "MA", "PYPL", "SQ", "COIN",
-                "XOM", "CVX", "COP", "EOG", "PXD", "MPC", "PSX", "VLO", "OXY",  # Removed HES (404)
+                "JPM", "BAC", "WFC", "GS", "MS", "V", "MA", "PYPL", "COIN",
+                "XOM", "CVX", "COP", "EOG", "MPC", "PSX", "VLO", "OXY",  # Removed HES (404)
                 "JNJ", "PFE", "MRK", "ABBV", "BMY", "LLY", "TMO", "DHR", "ABT", "AMGN",
                 "WMT", "COST", "HD", "LOW", "TGT", "DG", "DLTR", "KR", "CVS"  # Removed WBA (404)
             ],
