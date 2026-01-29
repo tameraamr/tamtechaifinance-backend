@@ -2209,16 +2209,19 @@ async def analyze_compare(
 
 @app.get("/market-sentiment")
 async def get_market_sentiment(db: Session = Depends(get_db)):
+    """
+    🚀 CACHE-FIRST: Returns sentiment from cache only (no API calls)
+    Used by navbar - must be instant
+    """
     try:
-        # Get SPY data from cache for sentiment calculation
-        spy_data = get_market_data_with_cache(["SPY"], {"SPY": "stock"}, db)
+        # Get SPY data from CACHE ONLY - no API calls allowed
+        cached_data = get_cached_market_data(["SPY"], db)
 
-        if "SPY" not in spy_data or spy_data["SPY"].get('price', 0) <= 0:
+        if "SPY" not in cached_data or cached_data["SPY"].get('price', 0) <= 0:
             return {"sentiment": "Neutral", "score": 50}
 
-        # For now, use a simplified sentiment based on price change
-        # In production, you might want to fetch historical data or use more complex logic
-        change_percent = spy_data["SPY"].get('change_percent', 0)
+        # Use cached data for instant response
+        change_percent = cached_data["SPY"].get('change_percent', 0)
 
         # Simple sentiment calculation based on daily change
         if change_percent > 2:
@@ -2265,8 +2268,8 @@ async def get_market_sectors(db: Session = Depends(get_db)):
             "S&P 500 Index": "SPY",
         }
 
-        # Get all sector data from cache
-        sector_data = get_market_data_with_cache(list(sector_tickers.values()), {ticker: "stock" for ticker in sector_tickers.values()}, db)
+        # Get all sector data from CACHE ONLY - no API calls allowed
+        sector_data = get_cached_market_data(list(sector_tickers.values()), db)
 
         results = []
         for name, sym in sector_tickers.items():
@@ -2697,15 +2700,12 @@ async def get_master_universe_heatmap(background_tasks: BackgroundTasks, db: Ses
         for ticker, data in cached_data.items():
             asset_class = data.get('asset_type', 'stocks')
 
-            # Format for heatmap display
+            # Format for heatmap display - STRIPPED TO ESSENTIALS ONLY
             heatmap_item = {
-                "ticker": ticker,
-                "name": data.get('name', ticker.upper()),
-                "price": data.get('price', 0),
-                "change_percent": data.get('change_percent', 0),
-                "market_cap": data.get('market_cap'),
-                "volume": data.get('volume'),
-                "asset_type": asset_class
+                "s": ticker,  # symbol (shorter key)
+                "p": round(data.get('price', 0), 2),  # price
+                "c": round(data.get('change_percent', 0), 2),  # change_percent
+                "t": asset_class  # type (stocks/crypto/commodities/forex)
             }
 
             if asset_class in heatmap_data:
