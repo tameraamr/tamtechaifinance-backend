@@ -2680,6 +2680,23 @@ async def get_portfolio(
         portfolio_data = []
 
         for holding in holdings:
+            ticker = holding.ticker
+            cache_entry = cached_data.get(ticker)
+
+            # Use cached data if available, otherwise default to 0
+            current_price = cache_entry.get('price', 0) if cache_entry else 0
+            change_p = cache_entry.get('change_percent', 0) if cache_entry else 0
+            sector = cache_entry.get('sector') if cache_entry else None
+
+            portfolio_data.append({
+                "id": holding.id,
+                "symbol": ticker,
+                "current_price": current_price,
+                "change_p": change_p,
+                "shares": holding.quantity,
+                "avg_buy_price": holding.avg_buy_price,
+                "sector": sector
+            })
 
         print(f"DEBUG: Returning {len(portfolio_data)} portfolio items to frontend")
         return portfolio_data
