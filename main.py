@@ -1992,69 +1992,61 @@ def get_market_winners_losers():
     Returns top 10 gainers and losers from major indices
     """
     try:
-        # Get S&P 500 components (top 100 for performance)
-        sp500 = yf.Ticker("^GSPC")
-        sp500_components = []
-        print("[DEBUG] Fetching S&P 500 components...")
-        try:
-            # Try to get components from yfinance
-            components = sp500.info.get('components', [])
-            print(f"[DEBUG] yfinance components: {components[:10]}")
-            if components:
-                sp500_components = components[:100]  # Limit to 100 for performance
-        except Exception as e:
-            print(f"[DEBUG] Exception fetching components from yfinance: {e}")
-            # Fallback to hardcoded major stocks
-            sp500_components = [
-                "AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "META", "NFLX", "BABA", "ORCL",
-                "CRM", "AMD", "INTC", "CSCO", "ADBE", "PYPL", "UBER", "SPOT", "ZM", "SHOP",
-                "COIN", "PLTR", "SNOW", "CRWD", "ZS", "OKTA", "DDOG", "NET", "DOCU",
-                "TWLO", "FSLY", "ETSY", "PINS", "ROKU", "FUBO", "SE", "BIDU", "JD", "NTES",
-                "TCEHY", "BILI", "IQ", "VIPS", "WB", "YY", "HUYA", "BZUN", "MOMO", "ATHM",
-                "XPEV", "LI", "NIO", "BYDDF", "TSM", "ASML", "QCOM", "TXN", "AVGO", "MU",
-                "LRCX", "KLAC", "AMAT", "TER", "ENTG", "ON", "SWKS", "QRVO", "CRUS", "MPWR",
-                "WDC", "STX", "NTAP", "HPE", "DELL", "HPQ", "IBM", "NOW", "PANW", "FTNT",
-                "CHKP", "AKAM", "FFIV", "JNPR", "CIEN", "EXTR", "VIAV", "COMM", "CALX", "INFN",
-                "LITE", "OCLR", "SATS", "VSAT", "ASTS", "SPCE", "RUM", "JOBY", "BLDE", "ASTR"
+        # Use the same cached data as the heatmap
+        from fastapi import Request
+        request = None
+        if 'request' in locals():
+            request = locals()['request']
+        db = None
+        if 'db' in locals():
+            db = locals()['db']
+        # If running inside FastAPI, get db from dependency
+        if db is None:
+            from fastapi import Depends
+            db = Depends(get_db)
+        # Get the universe of tickers from the heatmap logic
+        master_universe = {
+            "stocks": [
+                "SPY", "QQQ", "IWM", "VTI", "VXUS", "BND", "VEA", "VWO", "VIG", "VUG",
+                "AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "META", "NFLX", "AMD", "INTC",
+                "JPM", "BAC", "WFC", "GS", "MS", "V", "MA", "PYPL", "COIN",
+                "XOM", "CVX", "COP", "EOG", "MPC", "PSX", "VLO", "OXY",
+                "JNJ", "PFE", "MRK", "ABBV", "BMY", "LLY", "TMO", "DHR", "ABT", "AMGN",
+                "WMT", "COST", "HD", "LOW", "TGT", "DG", "DLTR", "KR", "CVS"
+            ],
+            "crypto": [
+                "BTC-USD", "ETH-USD", "BNB-USD", "ADA-USD", "SOL-USD", "DOT-USD", "DOGE-USD", "AVAX-USD", "LTC-USD", "MATIC-USD",
+                "LINK-USD", "ALGO-USD", "VET-USD", "ICP-USD", "FIL-USD", "TRX-USD", "ETC-USD", "XLM-USD", "THETA-USD", "HBAR-USD"
+            ],
+            "commodities": [
+                "GC=F", "SI=F", "CL=F", "NG=F", "HG=F", "PL=F", "PA=F", "ALI=F", "ZC=F", "ZW=F",
+                "ZS=F", "ZM=F", "ZL=F", "ZO=F", "ZR=F", "KE=F", "CC=F", "KC=F", "CT=F", "SB=F"
+            ],
+            "forex": [
+                "EURUSD=X", "GBPUSD=X", "USDJPY=X", "AUDUSD=X", "USDCAD=X", "USDCHF=X", "NZDUSD=X", "EURJPY=X", "GBPJPY=X", "AUDJPY=X",
+                "EURGBP=X", "EURAUD=X", "GBPAUD=X", "AUDNZD=X", "USDSGD=X", "USDHKD=X", "USDNOK=X", "USDSEK=X", "USDMXN=X", "USDBRL=X"
             ]
-        
-        if not sp500_components:
-            print("[DEBUG] No S&P 500 components found!")
-            return {"winners": [], "losers": [], "error": "Unable to fetch market data"}
-
-        print(f"[DEBUG] S&P 500 components to fetch: {sp500_components[:10]}")
-        # Use cached market data instead of individual API calls
-        tickers_to_fetch = sp500_components[:50]  # Limit to 50 for API rate limits
-        cached_data = get_market_data_with_cache(tickers_to_fetch)
-        print(f"[DEBUG] Cached data keys: {list(cached_data.keys())[:10]}")
-
+        }
+        all_tickers = []
+        for tickers in master_universe.values():
+            all_tickers.extend(tickers)
+        cached_data = get_cached_market_data(all_tickers, db)
         performance_data = []
-
-        for ticker in tickers_to_fetch:
-            if ticker in cached_data and cached_data[ticker]:
-                data = cached_data[ticker]
-                current_price = data.get('price', 0)
-                prev_close = data.get('previous_close', 0)
-                print(f"[DEBUG] {ticker}: price={current_price}, prev_close={prev_close}")
-                if prev_close > 0 and current_price > 0:
-                    change_percent = ((current_price - prev_close) / prev_close) * 100
-                    volume = data.get('volume', 0)
-                    performance_data.append({
-                        "ticker": ticker,
-                        "name": data.get("company_name", ticker),
-                        "price": current_price,
-                        "change_percent": change_percent,
-                        "volume": volume,
-                        "market_cap": data.get("market_cap", 0)
-                    })
-
-        print(f"[DEBUG] Performance data count: {len(performance_data)}")
-        # Sort by performance
+        for ticker, data in cached_data.items():
+            current_price = data.get('price', 0)
+            prev_close = data.get('previous_close', 0)
+            if prev_close > 0 and current_price > 0:
+                change_percent = ((current_price - prev_close) / prev_close) * 100
+                performance_data.append({
+                    "ticker": ticker,
+                    "name": data.get("company_name", ticker),
+                    "price": current_price,
+                    "change_percent": change_percent,
+                    "volume": data.get('volume', 0),
+                    "market_cap": data.get("market_cap", 0)
+                })
         winners = sorted(performance_data, key=lambda x: x["change_percent"], reverse=True)[:10]
         losers = sorted(performance_data, key=lambda x: x["change_percent"])[:10]
-
-        print(f"[DEBUG] Winners: {winners}")
-        print(f"[DEBUG] Losers: {losers}")
         return {
             "winners": winners,
             "losers": losers,
