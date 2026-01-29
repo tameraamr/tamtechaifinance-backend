@@ -353,31 +353,66 @@ def get_market_data_with_cache(tickers: list, asset_types: dict = None, db: Sess
     """
     Main function: Get market data with intelligent caching.
     - Check cache first (10-minute validity)
+    - Force fresh fetch for invalid cached data (price=0 or None)
     - Batch fetch missing/expired data
-    - Update cache
+    - Update cache asynchronously
     - Return complete dataset
     """
     if not tickers:
         return {}
-    
+
     # Get cached data
     cached_data = get_cached_market_data(tickers, db)
-    
-    # Find tickers that need fresh data
-    missing_tickers = [t for t in tickers if t not in cached_data]
-    
-    # Batch fetch missing data
-    if missing_tickers:
-        fresh_data = batch_fetch_market_data(missing_tickers, asset_types)
-        
-        # Update cache with fresh data
-        if fresh_data and db:
-            update_market_cache(fresh_data, db)
-        
-        # Merge fresh data with cached data
-        cached_data.update(fresh_data)
-    
-    return cached_data
+
+    # Find tickers that need fresh data (missing OR invalid cached data)
+    tickers_needing_fresh = []
+    valid_cached_data = {}
+
+    for ticker in tickers:
+        if ticker not in cached_data:
+            # Missing from cache
+            tickers_needing_fresh.append(ticker)
+        elif cached_data[ticker].get('price', 0) <= 0:
+            # Invalid cached data (price is 0 or negative)
+            tickers_needing_fresh.append(ticker)
+        else:
+            # Valid cached data
+            valid_cached_data[ticker] = cached_data[ticker]
+
+    # Batch fetch data that needs updating
+    if tickers_needing_fresh:
+        fresh_data = batch_fetch_market_data(tickers_needing_fresh, asset_types)
+
+        # Filter out invalid fresh data (don't cache bad data)
+        valid_fresh_data = {
+            ticker: data for ticker, data in fresh_data.items()
+            if data.get('price', 0) > 0 and data.get('success', False)
+        }
+
+        # Update cache with valid fresh data asynchronously
+        if valid_fresh_data and db:
+            try:
+                # Use background task for cache update to avoid blocking response
+                import threading
+                def update_cache_async():
+                    update_market_cache(valid_fresh_data, db)
+                thread = threading.Thread(target=update_cache_async, daemon=True)
+                thread.start()
+            except Exception as e:
+                print(f"⚠️ Async cache update failed: {e}")
+                # Fallback to synchronous update if threading fails
+                update_market_cache(valid_fresh_data, db)
+
+        # Merge valid fresh data with valid cached data
+        valid_cached_data.update(valid_fresh_data)
+
+        # For tickers that failed to fetch fresh data, return cached data even if invalid
+        # This ensures we always return something rather than empty data
+        for ticker in tickers_needing_fresh:
+            if ticker not in valid_cached_data and ticker in cached_data:
+                valid_cached_data[ticker] = cached_data[ticker]
+
+    return valid_cached_data
 
 # 🎯 HARD-CODED TICKER POOL - 180+ DIVERSE STOCKS
 # NO SMCI, NO PLTR - Removed to prove true randomness
@@ -1646,9 +1681,9 @@ async def verify_license(request: LicenseRequest, db: Session = Depends(get_db),
         return {"valid": False, "message": "Connection error with verification server"}
     
 @app.get("/market-pulse")
-def get_market_pulse():
+def get_market_pulse(db: Session = Depends(get_db)):
     try:
-        # رموز ياهو فاينانس الرسمية
+        # رموز ياهو فاينانس الرسمية - now using cache
         tickers = {
             "^GSPC": "S&P 500",
             "^IXIC": "NASDAQ",
@@ -1656,23 +1691,35 @@ def get_market_pulse():
             "BTC-USD": "Bitcoin",
             "GC=F": "GOLD"
         }
-        
+
+        # Get data from cache
+        market_data = get_market_data_with_cache(list(tickers.keys()), {
+            "^GSPC": "stock", "^IXIC": "stock", "NVDA": "stock",
+            "BTC-USD": "crypto", "GC=F": "commodity"
+        }, db)
+
         pulse_data = []
         for sym, name in tickers.items():
-            stock = yf.Ticker(sym)
-            info = stock.fast_info
-            current_price = info['last_price']
-            
-            # حساب نسبة التغيير
-            prev_close = stock.info.get('previousClose', current_price)
-            change = ((current_price - prev_close) / prev_close) * 100
-            
-            pulse_data.append({
-                "name": name,
-                "price": f"{current_price:,.2f}" if "Bitcoin" not in name else f"{current_price:,.0f}",
-                "change": f"{'+' if change > 0 else ''}{change:.2f}%",
-                "up": change > 0
-            })
+            if sym in market_data:
+                data = market_data[sym]
+                price = data.get('price', 0)
+                change_percent = data.get('change_percent', 0)
+
+                pulse_data.append({
+                    "name": name,
+                    "price": f"{price:,.2f}" if "Bitcoin" not in name else f"{price:,.0f}",
+                    "change": f"{'+' if change_percent > 0 else ''}{change_percent:.2f}%",
+                    "up": change_percent > 0
+                })
+            else:
+                # Fallback for missing data
+                pulse_data.append({
+                    "name": name,
+                    "price": "Loading...",
+                    "change": "0.00%",
+                    "up": True
+                })
+
         return pulse_data
     except Exception as e:
         print(f"Error fetching pulse: {e}")
@@ -1712,34 +1759,30 @@ def get_market_winners_losers():
         if not sp500_components:
             return {"winners": [], "losers": [], "error": "Unable to fetch market data"}
         
-        # Fetch daily performance for each stock
+        # Use cached market data instead of individual API calls
+        tickers_to_fetch = sp500_components[:50]  # Limit to 50 for API rate limits
+        cached_data = get_market_data_with_cache(tickers_to_fetch)
+        
         performance_data = []
         
-        for ticker in sp500_components[:50]:  # Limit to 50 for API rate limits
-            try:
-                stock = yf.Ticker(ticker)
-                info = stock.info
-                hist = stock.history(period="2d")
+        for ticker in tickers_to_fetch:
+            if ticker in cached_data and cached_data[ticker]:
+                data = cached_data[ticker]
+                current_price = data.get('price', 0)
+                prev_close = data.get('previous_close', 0)
                 
-                if len(hist) >= 2:
-                    current_price = hist['Close'].iloc[-1]
-                    prev_close = hist['Close'].iloc[-2]
+                if prev_close > 0 and current_price > 0:
+                    change_percent = ((current_price - prev_close) / prev_close) * 100
+                    volume = data.get('volume', 0)
                     
-                    if prev_close > 0:
-                        change_percent = ((current_price - prev_close) / prev_close) * 100
-                        volume = hist['Volume'].iloc[-1] if 'Volume' in hist.columns else 0
-                        
-                        performance_data.append({
-                            "ticker": ticker,
-                            "name": info.get("shortName", ticker),
-                            "price": current_price,
-                            "change_percent": change_percent,
-                            "volume": volume,
-                            "market_cap": info.get("marketCap", 0)
-                        })
-            except Exception as e:
-                print(f"Error fetching {ticker}: {e}")
-                continue
+                    performance_data.append({
+                        "ticker": ticker,
+                        "name": data.get("company_name", ticker),
+                        "price": current_price,
+                        "change_percent": change_percent,
+                        "volume": volume,
+                        "market_cap": data.get("market_cap", 0)
+                    })
         
         # Sort by performance
         winners = sorted(performance_data, key=lambda x: x["change_percent"], reverse=True)[:10]
@@ -2103,45 +2146,38 @@ async def analyze_compare(
 
 
 @app.get("/market-sentiment")
-async def get_market_sentiment():
+async def get_market_sentiment(db: Session = Depends(get_db)):
     try:
-        # جلب بيانات 30 يوم للحسابات السريعة
-        spy_ticker = yf.Ticker("SPY").history(period="30d")
-        if spy_ticker.empty:
-            return {"sentiment": "Neutral", "score": 50}
-            
-        # 1. حساب الزخم القصير (Current Price vs 20-day Average)
-        ma20 = spy_ticker['Close'].rolling(window=20).mean().iloc[-1]
-        current_spy = spy_ticker['Close'].iloc[-1]
-        
-        # 2. حساب الـ RSI المبسط (قوة الشراء والبيع)
-        delta = spy_ticker['Close'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean().iloc[-1]
-        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean().iloc[-1]
-        
-        if loss == 0:
-            rsi = 100
-        else:
-            rs = gain / loss
-            rsi = 100 - (100 / (1 + rs))
+        # Get SPY data from cache for sentiment calculation
+        spy_data = get_market_data_with_cache(["SPY"], {"SPY": "stock"}, db)
 
-        # دمج الـ RSI مع الزخم ليعطي نتيجة واقعية
-        # إذا الـ RSI عالي جداً (فوق 70) السوق في طمع (Greed)
-        momentum_impact = ((current_spy - ma20) / ma20 * 100) * 10 # تكبير التأثير ليتحرك السكور
-        final_score = (rsi * 0.7) + (momentum_impact * 0.3) + 20 
-        
-        # ضمان أن السكور بين 5 و 95
-        final_score = max(5, min(95, int(final_score)))
-        
-        sentiment_label = "Neutral"
-        if final_score > 70: sentiment_label = "Extreme Greed"
-        elif final_score > 55: sentiment_label = "Greed"
-        elif final_score < 30: sentiment_label = "Extreme Fear"
-        elif final_score < 45: sentiment_label = "Fear"
-        
+        if "SPY" not in spy_data or spy_data["SPY"].get('price', 0) <= 0:
+            return {"sentiment": "Neutral", "score": 50}
+
+        # For now, use a simplified sentiment based on price change
+        # In production, you might want to fetch historical data or use more complex logic
+        change_percent = spy_data["SPY"].get('change_percent', 0)
+
+        # Simple sentiment calculation based on daily change
+        if change_percent > 2:
+            sentiment_label = "Greed"
+            score = 75
+        elif change_percent > 0.5:
+            sentiment_label = "Optimism"
+            score = 60
+        elif change_percent > -0.5:
+            sentiment_label = "Neutral"
+            score = 50
+        elif change_percent > -2:
+            sentiment_label = "Caution"
+            score = 40
+        else:
+            sentiment_label = "Fear"
+            score = 25
+
         return {
             "sentiment": sentiment_label,
-            "score": final_score
+            "score": score
         }
     except Exception as e:
         print(f"Sentiment Error: {e}")
@@ -2149,7 +2185,7 @@ async def get_market_sentiment():
 
 
 @app.get("/market-sectors")
-async def get_market_sectors():
+async def get_market_sectors(db: Session = Depends(get_db)):
     try:
         # رموز الصناديق التي تمثل كامل قطاعات السوق الأمريكي (11 قطاعاً)
         sector_tickers = {
@@ -2166,30 +2202,23 @@ async def get_market_sectors():
             "Consumer Staples": "XLP",
             "S&P 500 Index": "SPY",
         }
+
+        # Get all sector data from cache
+        sector_data = get_market_data_with_cache(list(sector_tickers.values()), {ticker: "stock" for ticker in sector_tickers.values()}, db)
+
         results = []
-        
         for name, sym in sector_tickers.items():
-            try:
-                stock = yf.Ticker(sym)
-                hist = stock.history(period="2d")
-                
-                if hist is not None and not hist.empty and len(hist) >= 2:
-                    current_price = hist['Close'].iloc[-1]
-                    prev_price = hist['Close'].iloc[-2]
-                    
-                    if prev_price != 0:
-                        change = ((current_price - prev_price) / prev_price) * 100
-                        results.append({
-                            "name": name,
-                            "change": f"{change:+.2f}%",
-                            "positive": bool(change > 0)
-                        })
-                else:
-                    results.append({"name": name, "change": "0.00%", "positive": True})
-            except Exception as e:
-                print(f"Error fetching {name}: {e}")
-                continue
-        
+            if sym in sector_data:
+                change_percent = sector_data[sym].get('change_percent', 0)
+                results.append({
+                    "name": name,
+                    "change": f"{change_percent:+.2f}%",
+                    "positive": bool(change_percent > 0)
+                })
+            else:
+                # Fallback for missing data
+                results.append({"name": name, "change": "0.00%", "positive": True})
+
         return results
     except Exception as e:
         print(f"Global Sectors Error: {e}")
@@ -2335,26 +2364,31 @@ async def get_portfolio(
             PortfolioHolding.user_id == current_user.id
         ).all()
         
+        # Collect all tickers for batch fetching
+        tickers = [holding.ticker for holding in holdings]
+        
+        # Fetch all prices from cache
+        cached_data = get_market_data_with_cache(tickers) if tickers else {}
+        
         portfolio_data = []
         total_value = 0
         total_cost = 0
         
         for holding in holdings:
-            # Fetch live price
+            # Get data from cache
             price_error = False
-            try:
-                stock = yf.Ticker(holding.ticker)
-                info = stock.info
-                current_price = info.get("currentPrice") or info.get("regularMarketPrice") or 0
-                sector = info.get("sector", "Unknown")
-                industry = info.get("industry", "Unknown")
+            if holding.ticker in cached_data and cached_data[holding.ticker]:
+                data = cached_data[holding.ticker]
+                current_price = data.get("price", 0)
+                sector = data.get("sector", "Unknown")
+                industry = data.get("industry", "Unknown")
+                company_name = data.get("company_name", holding.ticker)
                 
-                # If price is 0, mark as error
+                # If price is 0 or invalid, mark as error
                 if current_price == 0:
                     price_error = True
-                    
-                company_name = info.get("shortName") or info.get("longName") or holding.ticker
-            except:
+            else:
+                # Fallback if not in cache
                 current_price = 0
                 company_name = holding.ticker
                 sector = "Unknown"
