@@ -136,15 +136,6 @@ class PortfolioHolding(Base):
         Index('ix_user_ticker', 'user_id', 'ticker', unique=True),
     )
 
-# 6. Portfolio Audits - Track AI audit history
-class PortfolioAudit(Base):
-    __tablename__ = "portfolio_audits"
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, index=True)
-    audit_json = Column(Text)  # Stores AI audit result as JSON
-    portfolio_health_score = Column(Integer)  # 0-100 score
-    created_at = Column(DateTime, default=func.now())
-
 # إنشاء الجداول تلقائياً
 Base.metadata.create_all(bind=engine)
 
@@ -1492,6 +1483,83 @@ def get_market_pulse():
         print(f"Error fetching pulse: {e}")
         return []
 
+@app.get("/market-winners-losers")
+def get_market_winners_losers():
+    """
+    📈 GET DAILY MARKET WINNERS & LOSERS (PREMIUM FEATURE)
+    Returns top 10 gainers and losers from major indices
+    """
+    try:
+        # Get S&P 500 components (top 100 for performance)
+        sp500 = yf.Ticker("^GSPC")
+        sp500_components = []
+        
+        try:
+            # Try to get components from yfinance
+            components = sp500.info.get('components', [])
+            if components:
+                sp500_components = components[:100]  # Limit to 100 for performance
+        except:
+            # Fallback to hardcoded major stocks
+            sp500_components = [
+                "AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "META", "NFLX", "BABA", "ORCL",
+                "CRM", "AMD", "INTC", "CSCO", "ADBE", "PYPL", "UBER", "SPOT", "ZM", "SHOP",
+                "SQ", "COIN", "PLTR", "SNOW", "CRWD", "ZS", "OKTA", "DDOG", "NET", "DOCU",
+                "TWLO", "FSLY", "ETSY", "PINS", "ROKU", "FUBO", "SE", "BIDU", "JD", "NTES",
+                "TCEHY", "BILI", "IQ", "VIPS", "WB", "YY", "HUYA", "BZUN", "MOMO", "ATHM",
+                "XPEV", "LI", "NIO", "BYDDF", "TSM", "ASML", "QCOM", "TXN", "AVGO", "MU",
+                "LRCX", "KLAC", "AMAT", "TER", "ENTG", "ON", "SWKS", "QRVO", "CRUS", "MPWR",
+                "WDC", "STX", "NTAP", "HPE", "DELL", "HPQ", "IBM", "NOW", "PANW", "FTNT",
+                "CHKP", "AKAM", "FFIV", "JNPR", "CIEN", "EXTR", "VIAV", "COMM", "CALX", "INFN",
+                "LITE", "OCLR", "SATS", "VSAT", "ASTS", "SPCE", "RUM", "JOBY", "BLDE", "ASTR"
+            ]
+        
+        if not sp500_components:
+            return {"winners": [], "losers": [], "error": "Unable to fetch market data"}
+        
+        # Fetch daily performance for each stock
+        performance_data = []
+        
+        for ticker in sp500_components[:50]:  # Limit to 50 for API rate limits
+            try:
+                stock = yf.Ticker(ticker)
+                info = stock.info
+                hist = stock.history(period="2d")
+                
+                if len(hist) >= 2:
+                    current_price = hist['Close'].iloc[-1]
+                    prev_close = hist['Close'].iloc[-2]
+                    
+                    if prev_close > 0:
+                        change_percent = ((current_price - prev_close) / prev_close) * 100
+                        volume = hist['Volume'].iloc[-1] if 'Volume' in hist.columns else 0
+                        
+                        performance_data.append({
+                            "ticker": ticker,
+                            "name": info.get("shortName", ticker),
+                            "price": current_price,
+                            "change_percent": change_percent,
+                            "volume": volume,
+                            "market_cap": info.get("marketCap", 0)
+                        })
+            except Exception as e:
+                print(f"Error fetching {ticker}: {e}")
+                continue
+        
+        # Sort by performance
+        winners = sorted(performance_data, key=lambda x: x["change_percent"], reverse=True)[:10]
+        losers = sorted(performance_data, key=lambda x: x["change_percent"])[:10]
+        
+        return {
+            "winners": winners,
+            "losers": losers,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        print(f"Error in winners/losers: {e}")
+        return {"winners": [], "losers": [], "error": str(e)}
+
 # --- Dynamic OG Image Generation for Social Sharing ---
 @app.get("/og/{ticker}")
 async def generate_og_image(ticker: str, db: Session = Depends(get_db)):
@@ -2083,6 +2151,8 @@ async def get_portfolio(
                 stock = yf.Ticker(holding.ticker)
                 info = stock.info
                 current_price = info.get("currentPrice") or info.get("regularMarketPrice") or 0
+                sector = info.get("sector", "Unknown")
+                industry = info.get("industry", "Unknown")
                 
                 # If price is 0, mark as error
                 if current_price == 0:
@@ -2092,6 +2162,8 @@ async def get_portfolio(
             except:
                 current_price = 0
                 company_name = holding.ticker
+                sector = "Unknown"
+                industry = "Unknown"
                 price_error = True
             
             # Calculate P&L
@@ -2114,6 +2186,8 @@ async def get_portfolio(
                 "cost_basis": cost_basis,
                 "pnl": pnl,
                 "pnl_percent": pnl_percent,
+                "sector": sector,
+                "industry": industry,
                 "price_error": price_error
             })
         
@@ -2251,256 +2325,5 @@ async def update_portfolio_holding(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# AI Portfolio Audit (PREMIUM - 5 CREDITS)
-@app.post("/portfolio/audit")
-async def audit_portfolio(
-    language: str = Form("en"),
-    current_user: User = Depends(get_current_user_mandatory),
-    db: Session = Depends(get_db)
-):
-    """
-    🤖 AI PORTFOLIO AUDIT (PREMIUM FEATURE - 5 CREDITS)
 
-    Analyzes entire portfolio for:
-    - Diversification score
-    - Correlation risks
-    - Sector exposure
-    - Overall portfolio health score
-    - Personalized recommendations
-    """
-    try:
-        print(f"🔍 AUDIT START: User {current_user.id}, Language: {language}")
-        # Email verification check
-        if current_user.is_verified != 1:
-            raise HTTPException(
-                status_code=403,
-                detail="Please verify your email to access this feature."
-            )
-        
-        # Credit check - costs 5 credits
-        if current_user.credits < 5:
-            raise HTTPException(
-                status_code=402,
-                detail=f"Insufficient credits. Portfolio audit costs 5 credits. You have {current_user.credits} credits."
-            )
-        
-        # Get all holdings
-        holdings = db.query(PortfolioHolding).filter(
-            PortfolioHolding.user_id == current_user.id
-        ).all()
-        
-        if not holdings:
-            raise HTTPException(
-                status_code=400,
-                detail="Your portfolio is empty. Add stocks first before running an audit."
-            )
-        
-        # NOTE: Credits will be deducted AFTER successful audit completion
-        
-        # Fetch live data for all holdings
-        portfolio_summary = []
-        total_value = 0
-        print(f"🔍 Processing {len(holdings)} holdings")
-        
-        for holding in holdings:
-            try:
-                print(f"🔍 Fetching data for {holding.ticker}")
-                stock = yf.Ticker(holding.ticker)
-                info = stock.info
-                current_price = info.get("currentPrice") or info.get("regularMarketPrice") or 0
-                sector = info.get("sector", "Unknown")
-                industry = info.get("industry", "Unknown")
-                market_cap = info.get("marketCap", 0)
-                
-                print(f"🔍 {holding.ticker}: price={current_price}, sector={sector}")
-                
-                market_value = current_price * holding.quantity
-                total_value += market_value
-                
-                portfolio_summary.append({
-                    "ticker": holding.ticker,
-                    "quantity": holding.quantity,
-                    "current_price": current_price,
-                    "market_value": market_value,
-                    "sector": sector,
-                    "industry": industry,
-                    "market_cap": market_cap
-                })
-            except Exception as e:
-                print(f"❌ Failed to fetch data for {holding.ticker}: {str(e)}")
-                continue
-        
-        print(f"🔍 Portfolio summary length: {len(portfolio_summary)}")
-        print(f"🔍 Total value: ${total_value:,.2f}")
-        
-        # If no stock data could be fetched, provide mock data for demo
-        if not portfolio_summary:
-            print("⚠️ No stock data fetched, using mock data for demo")
-            portfolio_summary = [
-                {
-                    "ticker": "DEMO",
-                    "quantity": 100,
-                    "current_price": 100.0,
-                    "market_value": 10000.0,
-                    "sector": "Technology",
-                    "industry": "Software",
-                    "market_cap": 1000000000,
-                    "weight_percent": 100.0
-                }
-            ]
-            total_value = 10000.0
-        
-        # Calculate weights
-        for item in portfolio_summary:
-            item["weight_percent"] = (item["market_value"] / total_value * 100) if total_value > 0 else 0
-        
-        # Build AI prompt
-        # Use the language from frontend, but ensure it's supported
-        # Extract language code (first 2 chars) from locale format like "en-US"
-        print(f"🔍 Received language parameter: {repr(language)}")
-        language_code = language.split('-')[0].lower() if language else 'en'
-        supported_languages = ['en', 'es', 'fr', 'de', 'it', 'pt', 'ar', 'zh', 'ja', 'ko', 'he', 'ru']
-        language_code = language_code if language_code in supported_languages else 'en'
-        print(f"🔍 Extracted language_code: {language_code}")
-        
-        # Map language codes to full names for better AI understanding
-        language_names = {
-            'en': 'English',
-            'es': 'Spanish', 
-            'fr': 'French',
-            'de': 'German',
-            'it': 'Italian',
-            'pt': 'Portuguese',
-            'ar': 'Arabic',
-            'zh': 'Chinese',
-            'ja': 'Japanese',
-            'ko': 'Korean',
-            'he': 'Hebrew',
-            'ru': 'Russian'
-        }
-        prompt = f"""Analyze this portfolio and return JSON only:
 
-{json.dumps(portfolio_summary, indent=2)}
-
-Format:
-{{
-  "portfolio_health_score": 75,
-  "diversification_score": 60,
-  "risk_level": "MEDIUM",
-  "summary": "Analysis in {language_name}",
-  "strengths": ["Strength 1", "Strength 2"],
-  "weaknesses": ["Weakness 1", "Weakness 2"],
-  "recommendations": ["Recommendation 1", "Recommendation 2"]
-}}"""
-        print(f"🔍 Prompt preview (first 200 chars): {repr(prompt[:200])}")
-        
-        # Call Gemini API with client
-        client = genai.Client(api_key=API_KEY)
-        
-        try:
-            response = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    temperature=0.0,  # Zero temperature for consistent JSON
-                    response_mime_type="text/plain"
-                )
-            )
-        except Exception as e:
-            print(f"❌ Gemini API error: {e}")
-            raise HTTPException(status_code=500, detail=f"AI service temporarily unavailable: {str(e)}")
-        
-        # Clean and parse response - robust handling of Gemini's response format
-        response_text = response.text
-        
-        # Debug: Log raw response
-        print(f"🔍 Raw Gemini response (first 500 chars): {repr(response_text[:500])}")
-        print(f"🔍 Raw Gemini response length: {len(response_text)}")
-        
-        # Check if response is empty
-        if not response_text or response_text.strip() == "":
-            print("❌ ERROR: Empty response from Gemini API")
-            raise HTTPException(status_code=500, detail="AI service returned empty response")
-        
-        # Since we specified response_mime_type="application/json", 
-        # Gemini should return pure JSON, but let's be safe
-        response_text = response_text.strip()
-        
-        # Debug: Log cleaned JSON
-        print(f"🔍 Cleaned JSON (first 500 chars): {repr(response_text[:500])}")
-        print(f"🔍 Cleaned JSON length: {len(response_text)}")
-        
-        try:
-            audit_result = json.loads(response_text)
-        except json.JSONDecodeError as e:
-            print(f"❌ JSON Parse Error: {e}")
-            print(f"❌ Failed JSON string: {repr(response_text[:1000])}")
-            # Try to extract JSON if there are extra characters
-            import re
-            json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
-            if json_match:
-                try:
-                    audit_result = json.loads(json_match.group())
-                    print("✅ Successfully extracted JSON from response")
-                except:
-                    raise ValueError(f"Failed to parse JSON response even after extraction: {str(e)}")
-            else:
-                raise ValueError(f"Failed to parse JSON response: {str(e)}")
-        
-        # Validate and sanitize audit result
-        print(f"🔍 Parsed audit_result keys: {list(audit_result.keys())}")
-        print(f"🔍 Strengths: {audit_result.get('strengths', 'NOT_FOUND')}")
-        print(f"🔍 Weaknesses: {audit_result.get('weaknesses', 'NOT_FOUND')}")
-        print(f"🔍 Recommendations: {audit_result.get('recommendations', 'NOT_FOUND')}")
-        
-        audit_result = {
-            "portfolio_health_score": audit_result.get("portfolio_health_score", 0),
-            "diversification_score": audit_result.get("diversification_score", 0),
-            "risk_level": audit_result.get("risk_level", "UNKNOWN"),
-            "summary": audit_result.get("summary", "Analysis completed but summary not available."),
-            "strengths": audit_result.get("strengths", []) if isinstance(audit_result.get("strengths"), list) else [],
-            "weaknesses": audit_result.get("weaknesses", []) if isinstance(audit_result.get("weaknesses"), list) else [],
-            "recommendations": audit_result.get("recommendations", []) if isinstance(audit_result.get("recommendations"), list) else []
-        }
-        
-        # Save audit to database
-        try:
-            audit_record = PortfolioAudit(
-                user_id=current_user.id,
-                audit_json=json.dumps(audit_result),
-                portfolio_health_score=audit_result.get("portfolio_health_score", 0)
-            )
-            db.add(audit_record)
-            
-            # DEDUCT 5 CREDITS ONLY AFTER SUCCESSFUL AUDIT
-            current_user.credits -= 5
-            db.commit()
-            
-        except Exception as e:
-            print(f"❌ Database save error: {e}")
-            db.rollback()
-            # Refund credits on database error
-            current_user.credits += 5
-            db.commit()
-            raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
-        
-        return {
-            "success": True,
-            "credits_remaining": current_user.credits,
-            "audit": audit_result,
-            "portfolio_value": total_value,
-            "holdings_count": len(holdings)
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        import traceback
-        print(f"Portfolio audit error: {e}")
-        print(traceback.format_exc())
-        
-        # Refund credits on error
-        current_user.credits += 5
-        db.commit()
-        
-        raise HTTPException(status_code=500, detail=f"Audit failed: {str(e)}")
