@@ -1950,48 +1950,6 @@ async def verify_license(request: LicenseRequest, db: Session = Depends(get_db),
     except Exception as e: 
         return {"valid": False, "message": "Connection error with verification server"}
     
-@app.get("/market-pulse")
-def get_market_pulse(background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    try:
-        # رموز ياهو فاينانس الرسمية - now using cache
-        tickers = {
-            "^GSPC": "S&P 500",
-            "^IXIC": "NASDAQ",
-            "NVDA": "NVIDIA",
-            "BTC-USD": "Bitcoin",
-            "GC=F": "GOLD"
-        }
-
-        # Use cache-first with background update if needed
-        market_data = get_cached_market_data_with_background_update(list(tickers.keys()), db, background_tasks)
-
-        pulse_data = []
-        for sym, name in tickers.items():
-            if sym in market_data:
-                data = market_data[sym]
-                price = data.get('price', 0)
-                change_percent = data.get('change_percent', 0)
-
-                pulse_data.append({
-                    "name": name,
-                    "price": f"{price:,.2f}" if "Bitcoin" not in name else f"{price:,.0f}",
-                    "change": f"{'+' if change_percent > 0 else ''}{change_percent:.2f}%",
-                    "up": change_percent > 0
-                })
-            else:
-                # Fallback for missing data
-                pulse_data.append({
-                    "name": name,
-                    "price": "Loading...",
-                    "change": "0.00%",
-                    "up": True
-                })
-
-        return pulse_data
-    except Exception as e:
-        print(f"Error fetching pulse: {e}")
-        return []
-
 @app.get("/market-winners-losers")
 def get_market_winners_losers(db: Session = Depends(get_db)):
     """
