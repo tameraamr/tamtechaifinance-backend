@@ -1986,24 +1986,14 @@ def get_market_pulse(background_tasks: BackgroundTasks, db: Session = Depends(ge
         return []
 
 @app.get("/market-winners-losers")
-def get_market_winners_losers():
+def get_market_winners_losers(db: Session = Depends(get_db)):
     """
     📈 GET DAILY MARKET WINNERS & LOSERS (PREMIUM FEATURE)
     Returns top 10 gainers and losers from major indices
     """
     try:
         # Use the same cached data as the heatmap
-        from fastapi import Request
-        request = None
-        if 'request' in locals():
-            request = locals()['request']
-        db = None
-        if 'db' in locals():
-            db = locals()['db']
-        # If running inside FastAPI, get db from dependency
-        if db is None:
-            from fastapi import Depends
-            db = Depends(get_db)
+        # db is now injected by FastAPI
         # Get the universe of tickers from the heatmap logic
         master_universe = {
             "stocks": [
