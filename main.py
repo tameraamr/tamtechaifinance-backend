@@ -2500,6 +2500,7 @@ async def get_portfolio(
         total_cost = 0
         
         for row in holdings_data:
+            holding_id = row[0]  # id
             ticker = row[1]  # ticker column
             quantity = row[3]  # quantity
             avg_buy_price = row[4]  # avg_buy_price
@@ -2520,10 +2521,20 @@ async def get_portfolio(
             total_cost += cost_basis
             
             portfolio_data.append({
-                "symbol": ticker,
+                "id": holding_id,
+                "ticker": ticker,
+                "company_name": company_name,
+                "quantity": quantity,
+                "avg_buy_price": avg_buy_price,
                 "current_price": current_price,
-                "change_p": change_p,
-                "sector": sector
+                "market_value": market_value,
+                "cost_basis": cost_basis,
+                "pnl": pnl,
+                "pnl_percent": pnl_percent,
+                "sector": sector,
+                "industry": "Unknown",  # Not available in cache
+                "price_error": current_price == 0,
+                "last_updated": None
             })
         
         total_pnl = total_value - total_cost
