@@ -466,11 +466,18 @@ def update_heatmap_cache_background(all_tickers: list, asset_types: dict):
         # Use the existing cache update logic but in background
         market_data = get_market_data_with_cache(all_tickers, asset_types, db)
 
-        print(f"✅ Background cache update completed for {len(market_data)} tickers")
+        # CRITICAL: Commit the transaction to save cache updates
+        db.commit()
+
+        print(f"✅ Background cache update completed and committed for {len(market_data)} tickers")
 
     except Exception as e:
         print(f"❌ Background cache update failed: {str(e)}")
-        # Don't raise exception - background tasks should fail silently
+        # Rollback on error
+        try:
+            db.rollback()
+        except:
+            pass  # Ignore rollback errors
     finally:
         # Always close the session
         db.close()
