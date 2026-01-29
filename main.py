@@ -1221,7 +1221,7 @@ async def get_user_dashboard_history(
         ).order_by(UserAnalysisHistory.updated_at.desc()).all()
         
         history_items = []
-        now = datetime.now(timezone.utc)
+        now = datetime.utcnow()  # Use offset-naive UTC datetime to match database
         
         for item in user_history:
             # Calculate how old the report is
@@ -2937,6 +2937,43 @@ async def get_master_universe_heatmap(background_tasks: BackgroundTasks, db: Ses
     except Exception as e:
         print(f"❌ Master Universe Heatmap Error: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch market data: {str(e)}")
+
+
+
+# ==================== CONTACT FORM ENDPOINT ====================
+
+class ContactForm(BaseModel):
+    name: str
+    email: str
+    subject: str
+    message: str
+
+@app.post("/contact")
+async def send_contact_form(contact: ContactForm):
+    """
+    📧 SEND CONTACT FORM EMAIL
+    Sends contact form submissions to tamtecht@gmail.com
+    """
+    try:
+        # Import mailer
+        from mailer import send_contact_email
+
+        # Send email
+        success = send_contact_email(
+            name=contact.name,
+            email=contact.email,
+            subject=contact.subject,
+            message=contact.message
+        )
+
+        if success:
+            return {"success": True, "message": "Message sent successfully!"}
+        else:
+            raise HTTPException(status_code=500, detail="Failed to send message")
+
+    except Exception as e:
+        print(f"Contact form error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to send message")
 
 
 
