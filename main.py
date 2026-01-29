@@ -2402,15 +2402,17 @@ async def get_portfolio(
     Returns all holdings with live prices and P&L calculations.
     """
     try:
+        print(f"Portfolio request for user {current_user.id}")
         holdings = db.query(PortfolioHolding).filter(
             PortfolioHolding.user_id == current_user.id
         ).all()
+        print(f"Found {len(holdings)} holdings")
         
         # Collect all tickers for batch fetching
         tickers = [holding.ticker for holding in holdings]
         
-        # Fetch all prices from cache - instant response with background updates
-        cached_data = get_market_data_with_cache(tickers, stale_while_revalidate=True) if tickers else {}
+        # Fetch all prices from cache - instant response, no background updates to avoid DB session issues
+        cached_data = get_market_data_with_cache(tickers) if tickers else {}
         
         portfolio_data = []
         total_value = 0
