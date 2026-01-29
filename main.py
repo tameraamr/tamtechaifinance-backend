@@ -227,87 +227,68 @@ def get_cached_market_data(tickers: list, db: Session) -> dict:
 
 def batch_fetch_market_data(tickers: list, asset_types: dict = None) -> dict:
     """
-    Batch fetch market data using yf.Tickers for optimal performance.
+    Batch fetch market data - using individual calls for reliability.
     Updates cache with fresh data.
     """
     if not tickers:
         return {}
-    
-    try:
-        # Use yf.Tickers for batch fetching (much faster than individual calls)
-        tickers_obj = yf.Tickers(' '.join(tickers))
-        data = {}
-        
-        for ticker in tickers:
-            try:
-                if hasattr(tickers_obj, ticker.lower()) and tickers_obj.ticker_objects.get(ticker.lower()):
-                    stock = tickers_obj.ticker_objects[ticker.lower()]
-                    info = stock.info
-                    
-                    # Extract data based on asset type
-                    asset_type = asset_types.get(ticker, 'stock') if asset_types else 'stock'
-                    
-                    current_price = info.get("currentPrice") or info.get("regularMarketPrice") or info.get("previousClose") or 0
-                    previous_close = info.get("previousClose") or current_price
-                    
-                    # Calculate 24h change percentage
-                    if previous_close and previous_close > 0:
-                        change_percent = ((current_price - previous_close) / previous_close) * 100
-                    else:
-                        change_percent = 0
-                    
-                    # Get name based on asset type
-                    if asset_type == 'crypto':
-                        name = info.get("name", ticker.upper())
-                    elif asset_type == 'commodity':
-                        name = info.get("shortName", ticker.upper())
-                    elif asset_type == 'forex':
-                        name = f"{ticker[:3]}/{ticker[3:]}"
-                    else:  # stock
-                        name = info.get("shortName") or info.get("longName") or ticker.upper()
-                    
-                    market_cap = info.get("marketCap")
-                    volume = info.get("volume") or info.get("averageVolume")
-                    
-                    data[ticker] = {
-                        'name': name,
-                        'price': current_price,
-                        'change_percent': change_percent,
-                        'market_cap': market_cap,
-                        'volume': volume,
-                        'asset_type': asset_type,
-                        'success': True
-                    }
-                else:
-                    # Fallback for tickers not found in batch
-                    data[ticker] = {
-                        'name': ticker.upper(),
-                        'price': 0,
-                        'change_percent': 0,
-                        'market_cap': None,
-                        'volume': None,
-                        'asset_type': asset_types.get(ticker, 'stock') if asset_types else 'stock',
-                        'success': False
-                    }
-                    
-            except Exception as e:
-                print(f"❌ Error fetching {ticker}: {e}")
-                data[ticker] = {
-                    'name': ticker.upper(),
-                    'price': 0,
-                    'change_percent': 0,
-                    'market_cap': None,
-                    'volume': None,
-                    'asset_type': asset_types.get(ticker, 'stock') if asset_types else 'stock',
-                    'success': False
-                }
-        
-        return data
-        
-    except Exception as e:
-        print(f"❌ Batch fetch error: {e}")
-        # Return empty dict on complete failure
-        return {}
+
+    data = {}
+
+    for ticker in tickers:
+        try:
+            # Use individual ticker objects for reliability
+            stock = yf.Ticker(ticker)
+            info = stock.info
+
+            # Extract data based on asset type
+            asset_type = asset_types.get(ticker, 'stock') if asset_types else 'stock'
+
+            current_price = info.get("currentPrice") or info.get("regularMarketPrice") or info.get("previousClose") or 0
+            previous_close = info.get("previousClose") or current_price
+
+            # Calculate 24h change percentage
+            if previous_close and previous_close > 0:
+                change_percent = ((current_price - previous_close) / previous_close) * 100
+            else:
+                change_percent = 0
+
+            # Get name based on asset type
+            if asset_type == 'crypto':
+                name = info.get("name", ticker.upper())
+            elif asset_type == 'commodity':
+                name = info.get("shortName", ticker.upper())
+            elif asset_type == 'forex':
+                name = f"{ticker[:3]}/{ticker[3:]}"
+            else:  # stock
+                name = info.get("shortName") or info.get("longName") or ticker.upper()
+
+            market_cap = info.get("marketCap")
+            volume = info.get("volume") or info.get("averageVolume")
+
+            data[ticker] = {
+                'name': name,
+                'price': current_price,
+                'change_percent': change_percent,
+                'market_cap': market_cap,
+                'volume': volume,
+                'asset_type': asset_type,
+                'success': current_price > 0
+            }
+
+        except Exception as e:
+            print(f"❌ Error fetching {ticker}: {e}")
+            data[ticker] = {
+                'name': ticker.upper(),
+                'price': 0,
+                'change_percent': 0,
+                'market_cap': None,
+                'volume': None,
+                'asset_type': asset_types.get(ticker, 'stock') if asset_types else 'stock',
+                'success': False
+            }
+
+    return data
 
 def update_market_cache(tickers_data: dict, db: Session):
     """
