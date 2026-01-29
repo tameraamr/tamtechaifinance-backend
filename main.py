@@ -452,11 +452,14 @@ def get_market_data_with_cache(tickers: list, asset_types: dict = None, db: Sess
 
     return valid_cached_data
 
-def update_heatmap_cache_background(all_tickers: list, asset_types: dict, db: Session):
+def update_heatmap_cache_background(all_tickers: list, asset_types: dict):
     """
     🔥 BACKGROUND TASK: Updates heatmap cache asynchronously
     Called only when cache needs refresh - prevents blocking API responses
+    Creates its own database session to avoid concurrency issues
     """
+    # Create a new database session for the background task
+    db = SessionLocal()
     try:
         print(f"🔄 Background cache update started for {len(all_tickers)} tickers")
 
@@ -468,6 +471,9 @@ def update_heatmap_cache_background(all_tickers: list, asset_types: dict, db: Se
     except Exception as e:
         print(f"❌ Background cache update failed: {str(e)}")
         # Don't raise exception - background tasks should fail silently
+    finally:
+        # Always close the session
+        db.close()
 
 # 🎯 HARD-CODED TICKER POOL - 180+ DIVERSE STOCKS
 # NO SMCI, NO PLTR - Removed to prove true randomness
@@ -2677,7 +2683,7 @@ async def get_master_universe_heatmap(background_tasks: BackgroundTasks, db: Ses
 
         # 🔥 BACKGROUND UPDATE: Only trigger if cache needs refresh
         if needs_update:
-            background_tasks.add_task(update_heatmap_cache_background, all_tickers, asset_types, db)
+            background_tasks.add_task(update_heatmap_cache_background, all_tickers, asset_types)
 
         # Organize response by asset class using cached data
         heatmap_data = {
