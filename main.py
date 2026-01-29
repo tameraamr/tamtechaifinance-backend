@@ -2483,7 +2483,7 @@ async def get_portfolio(
         # LEFT JOIN using raw SQL for simplicity
         from sqlalchemy import text
         query = text("""
-            SELECT ph.ticker, ph.quantity, mdc.price, mdc.change_percent, mdc.sector
+            SELECT ph.id, ph.ticker, ph.quantity, mdc.price, mdc.change_percent, mdc.sector
             FROM portfolio_holdings ph
             LEFT JOIN market_data_cache mdc ON ph.ticker = mdc.ticker
             WHERE ph.user_id = :user_id
@@ -2497,13 +2497,15 @@ async def get_portfolio(
         portfolio_data = []
         
         for row in holdings_data:
-            ticker = row[0]  # ticker
-            shares = row[1]  # quantity
-            current_price = row[2] if row[2] is not None else 0  # price from cache or 0
-            change_p = row[3] if row[3] is not None else 0  # change_percent from cache or 0
-            sector = row[4]  # sector from cache (may be None)
+            id = row[0]  # id
+            ticker = row[1]  # ticker
+            shares = row[2]  # quantity
+            current_price = row[3] if row[3] is not None else 0  # price from cache or 0
+            change_p = row[4] if row[4] is not None else 0  # change_percent from cache or 0
+            sector = row[5]  # sector from cache (may be None)
             
             portfolio_data.append({
+                "id": id,
                 "symbol": ticker,
                 "current_price": current_price,
                 "change_p": change_p,
