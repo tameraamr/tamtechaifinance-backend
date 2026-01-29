@@ -2023,17 +2023,16 @@ def get_market_winners_losers(db: Session = Depends(get_db)):
         cached_data = get_cached_market_data(all_tickers, db)
         performance_data = []
         for ticker, data in cached_data.items():
-            current_price = data.get('price', 0)
-            prev_close = data.get('previous_close', 0)
-            if prev_close > 0 and current_price > 0:
-                change_percent = ((current_price - prev_close) / prev_close) * 100
+            change_percent = data.get('change_percent')
+            if change_percent is not None:
                 performance_data.append({
                     "ticker": ticker,
-                    "name": data.get("company_name", ticker),
-                    "price": current_price,
+                    "name": data.get("name", ticker),
+                    "price": data.get("price", 0),
                     "change_percent": change_percent,
                     "volume": data.get('volume', 0),
-                    "market_cap": data.get("market_cap", 0)
+                    "market_cap": data.get("market_cap", 0),
+                    "sector": data.get("sector", "")
                 })
         winners = sorted(performance_data, key=lambda x: x["change_percent"], reverse=True)[:10]
         losers = sorted(performance_data, key=lambda x: x["change_percent"])[:10]
