@@ -498,14 +498,29 @@ def update_heatmap_cache_background(all_tickers: list, asset_types: dict):
     🔥 BACKGROUND TASK: Updates heatmap cache asynchronously
     Called only when cache needs refresh - prevents blocking API responses
     Creates its own database session to avoid concurrency issues
+    NOW INCLUDES PORTFOLIO TICKERS: Combines heatmap + portfolio tickers
     """
     # Create a new database session for the background task
     db = SessionLocal()
     try:
-        print(f"🔄 Background cache update started for {len(all_tickers)} tickers")
+        # 🎯 CRITICAL FIX: Include portfolio tickers in the update
+        # Get all unique tickers from portfolio_holdings table
+        portfolio_tickers = db.query(PortfolioHolding.ticker).distinct().all()
+        portfolio_tickers = [row[0] for row in portfolio_tickers]  # Extract tickers from tuples
+
+        # Merge heatmap tickers + portfolio tickers, remove duplicates
+        combined_tickers = list(set(all_tickers + portfolio_tickers))
+
+        # Create asset types for portfolio tickers (default to 'stocks')
+        combined_asset_types = asset_types.copy()
+        for ticker in portfolio_tickers:
+            if ticker not in combined_asset_types:
+                combined_asset_types[ticker] = 'stocks'  # Default portfolio tickers to stocks
+
+        print(f"🔄 Background cache update started for {len(combined_tickers)} tickers ({len(all_tickers)} heatmap + {len(portfolio_tickers)} portfolio)")
 
         # Use the existing cache update logic but in background
-        market_data = get_market_data_with_cache(all_tickers, asset_types, db)
+        market_data = get_market_data_with_cache(combined_tickers, combined_asset_types, db)
 
         # CRITICAL: Commit the transaction to save cache updates
         db.commit()
@@ -2479,11 +2494,13 @@ async def get_stock_page_data(
 @app.get("/portfolio")
 async def get_portfolio(
     current_user: User = Depends(get_current_user_mandatory),
+    background_tasks: BackgroundTasks = BackgroundTasks(),
     db: Session = Depends(get_db)
 ):
     """
     📊 GET USER PORTFOLIO (FREE FEATURE)
     Returns all holdings with live prices using unified cache source.
+    URGENT FIX: If any ticker shows $0.00, trigger immediate background fetch
     """
     try:
         print(f"Portfolio request for user {current_user.id}")
@@ -2505,6 +2522,7 @@ async def get_portfolio(
         cached_data = get_cached_market_data(tickers, db)
 
         portfolio_data = []
+        missing_tickers = []  # Track tickers that need immediate fetch
 
         for holding in holdings:
             ticker = holding.ticker
@@ -2515,6 +2533,11 @@ async def get_portfolio(
             change_p = cache_entry.get('change_percent', 0) if cache_entry else 0
             sector = cache_entry.get('sector') if cache_entry else None
 
+            # 🚨 URGENT FIX: If price is 0 or missing, mark for immediate background fetch
+            if current_price <= 0:
+                missing_tickers.append(ticker)
+                print(f"🚨 Portfolio: {ticker} shows ${current_price} - triggering immediate fetch")
+
             portfolio_data.append({
                 "id": holding.id,
                 "symbol": ticker,
@@ -2523,6 +2546,11 @@ async def get_portfolio(
                 "shares": holding.quantity,
                 "sector": sector
             })
+
+        # 🔥 IMMEDIATE FETCH: If any tickers are missing/zero, trigger background update
+        if missing_tickers:
+            print(f"🔄 Portfolio: Triggering immediate background fetch for {len(missing_tickers)} missing tickers: {missing_tickers}")
+            background_tasks.add_task(update_market_data_background, missing_tickers)
 
         print(f"DEBUG: Returning {len(portfolio_data)} portfolio items to frontend")
         return portfolio_data
@@ -2778,10 +2806,10 @@ async def get_master_universe_heatmap(background_tasks: BackgroundTasks, db: Ses
 
 def warmup_cache_on_startup():
     """
-    URGENT FIX 4: Batch warm-up - fetch top 100 assets on server startup
+    URGENT FIX 4: Batch warm-up - fetch top 100 assets + ALL portfolio tickers on server startup
     This ensures cache is 'warm' before first user visits, preventing $0 displays
     """
-    print("🔥 Warming up cache with top 100 assets...")
+    print("🔥 Warming up cache with top 100 assets + portfolio tickers...")
 
     try:
         # Create database session
@@ -2790,14 +2818,21 @@ def warmup_cache_on_startup():
         # Top 100 assets from our ticker pool (first 100)
         top_100_tickers = TICKER_POOL[:100]
 
-        # Asset type mapping for proper data fetching
-        asset_types = {ticker: 'stock' for ticker in top_100_tickers}
+        # 🚨 CRITICAL: Also fetch ALL existing portfolio tickers immediately
+        portfolio_tickers = db.query(PortfolioHolding.ticker).distinct().all()
+        portfolio_tickers = [row[0] for row in portfolio_tickers]  # Extract tickers
 
-        print(f"📊 Fetching {len(top_100_tickers)} assets for cache warm-up...")
+        # Combine and deduplicate
+        all_warmup_tickers = list(set(top_100_tickers + portfolio_tickers))
+
+        # Asset type mapping for proper data fetching
+        asset_types = {ticker: 'stock' for ticker in all_warmup_tickers}
+
+        print(f"📊 Fetching {len(all_warmup_tickers)} assets for cache warm-up ({len(top_100_tickers)} heatmap + {len(portfolio_tickers)} portfolio)...")
 
         # Force fresh fetch for all tickers (bypass cache completely for warm-up)
         market_data = get_market_data_with_cache(
-            top_100_tickers,
+            all_warmup_tickers,
             asset_types,
             db,
             force_fresh=True  # Force fresh fetch for all
@@ -2806,7 +2841,7 @@ def warmup_cache_on_startup():
         # Count successful fetches
         successful_fetches = sum(1 for data in market_data.values() if data.get('price', 0) > 0)
 
-        print(f"✅ Cache warm-up complete: {successful_fetches}/{len(top_100_tickers)} assets cached")
+        print(f"✅ Cache warm-up complete: {successful_fetches}/{len(all_warmup_tickers)} assets cached")
         print("💾 Cache is now WARM - ready for user requests!")
 
         db.close()
