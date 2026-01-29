@@ -2660,24 +2660,9 @@ async def get_portfolio(
         # 🔗 UNIFIED CACHE SOURCE: Use the same get_cached_market_data() function as heatmap
         cached_data = get_cached_market_data(tickers, db)
 
-        # 🔥 FORCE IMMEDIATE SYNC: Fetch missing price data immediately for portfolio
-        missing_tickers = []
-        for ticker in tickers:
-            if ticker not in cached_data or cached_data[ticker].get('price', 0) <= 0:
-                missing_tickers.append(ticker)
-
-        if missing_tickers:
-            print(f"🔥 Portfolio: Force syncing {len(missing_tickers)} tickers with missing/zero prices: {missing_tickers}")
-            try:
-                # Fetch missing data immediately
-                missing_data = get_market_data_with_cache(missing_tickers, {'stocks': 'stocks'}, db)  # Default to stocks
-                cached_data.update(missing_data)
-                db.commit()  # Save the new data
-                print(f"✅ Portfolio force sync completed for {len(missing_data)} tickers")
-            except Exception as e:
-                print(f"❌ Portfolio force sync failed: {e}")
-
+        # � STALE-WHILE-REVALIDATE: Return cached data immediately, update stale data in background
         portfolio_data = []
+        stale_tickers = []
 
         for holding in holdings:
             ticker = holding.ticker
@@ -2688,6 +2673,11 @@ async def get_portfolio(
             change_p = cache_entry.get('change_percent', 0) if cache_entry else 0
             sector = cache_entry.get('sector') if cache_entry else None
 
+            # Check if data is stale (>10 min) or missing
+            if not cache_entry or (cache_entry.get('last_updated') and 
+                                 cache_entry['last_updated'] < datetime.now(UTC) - timedelta(minutes=10)):
+                stale_tickers.append(ticker)
+
             portfolio_data.append({
                 "id": holding.id,
                 "symbol": ticker,
@@ -2697,6 +2687,11 @@ async def get_portfolio(
                 "avg_buy_price": holding.avg_buy_price,
                 "sector": sector
             })
+
+        # 🔥 BACKGROUND UPDATE: Trigger only AFTER returning response
+        if stale_tickers:
+            print(f"🔄 Portfolio: Triggering background update for {len(stale_tickers)} stale/missing tickers")
+            background_tasks.add_task(update_market_data_background, stale_tickers)
 
         print(f"DEBUG: Returning {len(portfolio_data)} portfolio items to frontend")
         return portfolio_data
@@ -2872,40 +2867,33 @@ async def get_master_universe_heatmap(background_tasks: BackgroundTasks, db: Ses
                 all_tickers.append(ticker)
                 asset_types[ticker] = asset_class
 
-        # 🚀 STALE-WHILE-REVALIDATE: Always return data, update in background
+        # 🚀 TRUE STALE-WHILE-REVALIDATE: Always return data immediately, update in background
         cached_data = get_cached_market_data(all_tickers, db)
 
-        # Check data completeness
+        # Check data completeness and staleness
         current_time = datetime.now(UTC)
         complete_data = len(cached_data) == len(all_tickers)
-        needs_update = not complete_data
+        needs_background_update = not complete_data
 
-        # 🔥 FORCE IMMEDIATE SYNC: If cache is incomplete, fetch missing tickers immediately
-        if not complete_data:
-            missing_tickers = [ticker for ticker in all_tickers if ticker not in cached_data]
-            print(f"🔥 Force syncing {len(missing_tickers)} missing tickers: {missing_tickers}")
-            
-            try:
-                # Fetch missing data immediately
-                missing_data = get_market_data_with_cache(missing_tickers, {ticker: asset_types.get(ticker, 'stocks') for ticker in missing_tickers}, db)
-                cached_data.update(missing_data)
-                db.commit()  # Save the new data
-                complete_data = len(cached_data) == len(all_tickers)
-                print(f"✅ Force sync completed. Cache now has {len(cached_data)}/{len(all_tickers)} items")
-            except Exception as e:
-                print(f"❌ Force sync failed: {e}")
-
-        # Check for expired data if we have complete data
+        # Check for expired data even if complete (stale-while-revalidate)
         if complete_data:
             for ticker in all_tickers:
                 if ticker in cached_data:
                     last_updated = cached_data[ticker].get('last_updated')
                     if not last_updated or (current_time - last_updated).total_seconds() >= 600:  # 10 minutes
+                        needs_background_update = True
+                        break
+
+        # 🔥 BACKGROUND UPDATE: Trigger only AFTER determining response data
+        if needs_background_update:
+            background_tasks.add_task(update_heatmap_cache_background, all_tickers, asset_types)
+                    last_updated = cached_data[ticker].get('last_updated')
+                    if not last_updated or (current_time - last_updated).total_seconds() >= 600:  # 10 minutes
                         needs_update = True
                         break
 
-        # 🔥 BACKGROUND UPDATE: Trigger if needed
-        if needs_update:
+        # 🔥 BACKGROUND UPDATE: Trigger only AFTER determining response data
+        if needs_background_update:
             background_tasks.add_task(update_heatmap_cache_background, all_tickers, asset_types)
 
         # 🛡️ ATOMIC UPDATES: If we don't have complete data, try to get the last full valid cache
