@@ -2887,12 +2887,6 @@ async def get_master_universe_heatmap(background_tasks: BackgroundTasks, db: Ses
         # 🔥 BACKGROUND UPDATE: Trigger only AFTER determining response data
         if needs_background_update:
             background_tasks.add_task(update_heatmap_cache_background, all_tickers, asset_types)
-                    last_updated = cached_data[ticker].get('last_updated')
-                    if not last_updated or (current_time - last_updated).total_seconds() >= 600:  # 10 minutes
-                        needs_update = True
-                        break
-
-        # 🔥 BACKGROUND UPDATE: Trigger only AFTER determining response data
         if needs_background_update:
             background_tasks.add_task(update_heatmap_cache_background, all_tickers, asset_types)
 
