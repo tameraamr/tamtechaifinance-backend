@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, status, Request, Response, Cookie, Form
+from fastapi import FastAPI, HTTPException, Depends, status, Request, Response, Cookie, Form, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel, EmailStr, Field, field_validator
@@ -225,9 +225,10 @@ def get_cached_market_data(tickers: list, db: Session) -> dict:
         'last_updated': item.last_updated
     } for item in cached_data}
 
-def batch_fetch_market_data(tickers: list, asset_types: dict = None) -> dict:
+def batch_fetch_market_data(tickers: list, asset_types: dict = None, chunk_size: int = 50) -> dict:
     """
     Batch fetch market data - using individual calls for reliability.
+    Now supports chunked fetching to prevent timeouts with large batches.
     Updates cache with fresh data.
     """
     if not tickers:
@@ -238,58 +239,63 @@ def batch_fetch_market_data(tickers: list, asset_types: dict = None) -> dict:
 
     data = {}
 
-    for ticker in tickers:
-        try:
-            # Use individual ticker objects for reliability
-            stock = yf.Ticker(ticker)
-            info = stock.info
+    # Process tickers in chunks to prevent timeouts
+    for i in range(0, len(tickers), chunk_size):
+        chunk = tickers[i:i + chunk_size]
+        print(f"📦 Processing chunk {i//chunk_size + 1} of {(len(tickers) + chunk_size - 1)//chunk_size}: {len(chunk)} tickers")
 
-            # Extract data based on asset type
-            asset_type = asset_types.get(ticker, 'stock') if asset_types else 'stock'
+        for ticker in chunk:
+            try:
+                # Use individual ticker objects for reliability
+                stock = yf.Ticker(ticker)
+                info = stock.info
 
-            current_price = info.get("currentPrice") or info.get("regularMarketPrice") or info.get("previousClose") or 0
-            previous_close = info.get("previousClose") or current_price
+                # Extract data based on asset type
+                asset_type = asset_types.get(ticker, 'stock') if asset_types else 'stock'
 
-            # Calculate 24h change percentage
-            if previous_close and previous_close > 0:
-                change_percent = ((current_price - previous_close) / previous_close) * 100
-            else:
-                change_percent = 0
+                current_price = info.get("currentPrice") or info.get("regularMarketPrice") or info.get("previousClose") or 0
+                previous_close = info.get("previousClose") or current_price
 
-            # Get name based on asset type
-            if asset_type == 'crypto':
-                name = info.get("name", ticker.upper())
-            elif asset_type == 'commodity':
-                name = info.get("shortName", ticker.upper())
-            elif asset_type == 'forex':
-                name = f"{ticker[:3]}/{ticker[3:]}"
-            else:  # stock
-                name = info.get("shortName") or info.get("longName") or ticker.upper()
+                # Calculate 24h change percentage
+                if previous_close and previous_close > 0:
+                    change_percent = ((current_price - previous_close) / previous_close) * 100
+                else:
+                    change_percent = 0
 
-            market_cap = info.get("marketCap")
-            volume = info.get("volume") or info.get("averageVolume")
+                # Get name based on asset type
+                if asset_type == 'crypto':
+                    name = info.get("name", ticker.upper())
+                elif asset_type == 'commodity':
+                    name = info.get("shortName", ticker.upper())
+                elif asset_type == 'forex':
+                    name = f"{ticker[:3]}/{ticker[3:]}"
+                else:  # stock
+                    name = info.get("shortName") or info.get("longName") or ticker.upper()
 
-            data[ticker] = {
-                'name': name,
-                'price': current_price,
-                'change_percent': change_percent,
-                'market_cap': market_cap,
-                'volume': volume,
-                'asset_type': asset_type,
-                'success': current_price > 0
-            }
+                market_cap = info.get("marketCap")
+                volume = info.get("volume") or info.get("averageVolume")
 
-        except Exception as e:
-            print(f"❌ Error fetching {ticker}: {e}")
-            data[ticker] = {
-                'name': ticker.upper(),
-                'price': 0,
-                'change_percent': 0,
-                'market_cap': None,
-                'volume': None,
-                'asset_type': asset_types.get(ticker, 'stock') if asset_types else 'stock',
-                'success': False
-            }
+                data[ticker] = {
+                    'name': name,
+                    'price': current_price,
+                    'change_percent': change_percent,
+                    'market_cap': market_cap,
+                    'volume': volume,
+                    'asset_type': asset_type,
+                    'success': current_price > 0
+                }
+
+            except Exception as e:
+                print(f"❌ Error fetching {ticker}: {e}")
+                data[ticker] = {
+                    'name': ticker.upper(),
+                    'price': 0,
+                    'change_percent': 0,
+                    'market_cap': None,
+                    'volume': None,
+                    'asset_type': asset_types.get(ticker, 'stock') if asset_types else 'stock',
+                    'success': False
+                }
 
     return data
 
@@ -445,6 +451,23 @@ def get_market_data_with_cache(tickers: list, asset_types: dict = None, db: Sess
                 valid_cached_data[ticker] = cached_data[ticker]
 
     return valid_cached_data
+
+def update_heatmap_cache_background(all_tickers: list, asset_types: dict, db: Session):
+    """
+    🔥 BACKGROUND TASK: Updates heatmap cache asynchronously
+    Called only when cache needs refresh - prevents blocking API responses
+    """
+    try:
+        print(f"🔄 Background cache update started for {len(all_tickers)} tickers")
+
+        # Use the existing cache update logic but in background
+        market_data = get_market_data_with_cache(all_tickers, asset_types, db)
+
+        print(f"✅ Background cache update completed for {len(market_data)} tickers")
+
+    except Exception as e:
+        print(f"❌ Background cache update failed: {str(e)}")
+        # Don't raise exception - background tasks should fail silently
 
 # 🎯 HARD-CODED TICKER POOL - 180+ DIVERSE STOCKS
 # NO SMCI, NO PLTR - Removed to prove true randomness
@@ -2591,11 +2614,12 @@ async def update_portfolio_holding(
 # ==================== MASTER UNIVERSE HEATMAP ENDPOINT ====================
 
 @app.get("/master-universe-heatmap")
-async def get_master_universe_heatmap(db: Session = Depends(get_db)):
+async def get_master_universe_heatmap(background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     """
     🌍 MASTER UNIVERSE HEATMAP (FREE FEATURE)
     Returns market data for 100+ assets across stocks, crypto, commodities, and forex.
     Uses intelligent caching with 10-minute validity and batch fetching.
+    TRULY NON-BLOCKING: Returns cached data instantly, updates in background.
     """
     try:
         # 🎯 MASTER UNIVERSE - 100+ ASSETS ACROSS MULTIPLE CLASSES
@@ -2605,9 +2629,9 @@ async def get_master_universe_heatmap(db: Session = Depends(get_db)):
                 "SPY", "QQQ", "IWM", "VTI", "VXUS", "BND", "VEA", "VWO", "VIG", "VUG",
                 "AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "META", "NFLX", "AMD", "INTC",
                 "JPM", "BAC", "WFC", "GS", "MS", "V", "MA", "PYPL", "SQ", "COIN",
-                "XOM", "CVX", "COP", "EOG", "PXD", "MPC", "PSX", "VLO", "HES", "OXY",
+                "XOM", "CVX", "COP", "EOG", "PXD", "MPC", "PSX", "VLO", "OXY",  # Removed HES (404)
                 "JNJ", "PFE", "MRK", "ABBV", "BMY", "LLY", "TMO", "DHR", "ABT", "AMGN",
-                "WMT", "COST", "HD", "LOW", "TGT", "DG", "DLTR", "KR", "WBA", "CVS"
+                "WMT", "COST", "HD", "LOW", "TGT", "DG", "DLTR", "KR", "CVS"  # Removed WBA (404)
             ],
             # ₿ CRYPTOCURRENCIES
             "crypto": [
@@ -2625,31 +2649,48 @@ async def get_master_universe_heatmap(db: Session = Depends(get_db)):
                 "EURGBP=X", "EURAUD=X", "GBPAUD=X", "AUDNZD=X", "USDSGD=X", "USDHKD=X", "USDNOK=X", "USDSEK=X", "USDMXN=X", "USDBRL=X"
             ]
         }
-        
+
         # Flatten all tickers and create asset type mapping
         all_tickers = []
         asset_types = {}
-        
+
         for asset_class, tickers in master_universe.items():
             for ticker in tickers:
                 all_tickers.append(ticker)
                 asset_types[ticker] = asset_class
-        
-        # Get market data with intelligent caching
-        market_data = get_market_data_with_cache(all_tickers, asset_types, db)
-        
-        # Organize response by asset class
+
+        # 🚀 TRULY NON-BLOCKING: Get cached data instantly (no API calls)
+        cached_data = get_cached_market_data(all_tickers, db)
+
+        # Check if we need background updates (only if some data is missing or expired)
+        current_time = datetime.utcnow()
+        needs_update = False
+
+        for ticker in all_tickers:
+            if ticker not in cached_data:
+                needs_update = True
+                break
+            last_updated = cached_data[ticker].get('last_updated')
+            if not last_updated or (current_time - last_updated).total_seconds() >= 600:  # 10 minutes
+                needs_update = True
+                break
+
+        # 🔥 BACKGROUND UPDATE: Only trigger if cache needs refresh
+        if needs_update:
+            background_tasks.add_task(update_heatmap_cache_background, all_tickers, asset_types, db)
+
+        # Organize response by asset class using cached data
         heatmap_data = {
             "stocks": [],
             "crypto": [],
             "commodities": [],
             "forex": [],
-            "last_updated": datetime.now().isoformat()
+            "last_updated": datetime.utcnow().isoformat()
         }
-        
-        for ticker, data in market_data.items():
+
+        for ticker, data in cached_data.items():
             asset_class = data.get('asset_type', 'stocks')
-            
+
             # Format for heatmap display
             heatmap_item = {
                 "ticker": ticker,
@@ -2660,15 +2701,15 @@ async def get_master_universe_heatmap(db: Session = Depends(get_db)):
                 "volume": data.get('volume'),
                 "asset_type": asset_class
             }
-            
+
             if asset_class in heatmap_data:
                 heatmap_data[asset_class].append(heatmap_item)
-        
+
         # Sort each asset class by absolute change percentage (most volatile first)
         for asset_class in heatmap_data:
             if asset_class != "last_updated":
                 heatmap_data[asset_class].sort(key=lambda x: abs(x.get('change_percent', 0)), reverse=True)
-        
+
         return heatmap_data
         
     except Exception as e:
