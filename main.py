@@ -2475,8 +2475,7 @@ async def get_portfolio(
 ):
     """
     📊 GET USER PORTFOLIO (FREE FEATURE)
-    Returns all holdings with live prices and P&L calculations.
-    Uses LEFT JOIN between portfolio_holdings and market_data_cache.
+    Returns all holdings with live prices using LEFT JOIN.
     """
     try:
         print(f"Portfolio request for user {current_user.id}")
@@ -2484,7 +2483,7 @@ async def get_portfolio(
         # LEFT JOIN using raw SQL for simplicity
         from sqlalchemy import text
         query = text("""
-            SELECT ph.*, mdc.price, mdc.change_percent, mdc.sector, mdc.name
+            SELECT ph.ticker, ph.quantity, mdc.price, mdc.change_percent, mdc.sector
             FROM portfolio_holdings ph
             LEFT JOIN market_data_cache mdc ON ph.ticker = mdc.ticker
             WHERE ph.user_id = :user_id
@@ -2493,64 +2492,28 @@ async def get_portfolio(
         result = db.execute(query, {"user_id": current_user.id})
         holdings_data = result.fetchall()
         
-        print(f"Found {len(holdings_data)} holdings")
+        print(f"DEBUG: Found {len(holdings_data)} holdings in portfolio_holdings for user {current_user.id}")
         
         portfolio_data = []
-        total_value = 0
-        total_cost = 0
         
         for row in holdings_data:
-            holding_id = row[0]  # id
-            ticker = row[1]  # ticker column
-            quantity = row[3]  # quantity
-            avg_buy_price = row[4]  # avg_buy_price
-            
-            # Cache data (may be None)
-            current_price = row[5] if row[5] is not None else 0  # price
-            change_p = row[6] if row[6] is not None else 0  # change_percent
-            sector = row[7]  # sector
-            company_name = row[8] if row[8] else ticker  # name
-            
-            # Calculate P&L
-            market_value = current_price * quantity
-            cost_basis = (avg_buy_price or 0) * quantity
-            pnl = market_value - cost_basis if avg_buy_price else 0
-            pnl_percent = (pnl / cost_basis * 100) if cost_basis > 0 else 0
-            
-            total_value += market_value
-            total_cost += cost_basis
+            ticker = row[0]  # ticker
+            shares = row[1]  # quantity
+            current_price = row[2] if row[2] is not None else 0  # price from cache or 0
+            change_p = row[3] if row[3] is not None else 0  # change_percent from cache or 0
+            sector = row[4]  # sector from cache (may be None)
             
             portfolio_data.append({
-                "id": holding_id,
-                "ticker": ticker,
-                "company_name": company_name,
-                "quantity": quantity,
-                "avg_buy_price": avg_buy_price,
+                "symbol": ticker,
                 "current_price": current_price,
-                "market_value": market_value,
-                "cost_basis": cost_basis,
-                "pnl": pnl,
-                "pnl_percent": pnl_percent,
-                "sector": sector,
-                "industry": "Unknown",  # Not available in cache
-                "price_error": current_price == 0,
-                "last_updated": None
+                "change_p": change_p,
+                "shares": shares,
+                "sector": sector
             })
         
-        total_pnl = total_value - total_cost
-        total_pnl_percent = (total_pnl / total_cost * 100) if total_cost > 0 else 0
+        print(f"DEBUG: Returning {len(portfolio_data)} portfolio items to frontend")
+        return portfolio_data
         
-        return {
-            "success": True,
-            "holdings": portfolio_data,
-            "summary": {
-                "total_value": total_value,
-                "total_cost": total_cost,
-                "total_pnl": total_pnl,
-                "total_pnl_percent": total_pnl_percent,
-                "holdings_count": len(holdings_data)
-            }
-        }
     except Exception as e:
         print(f"Portfolio error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
