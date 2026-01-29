@@ -2195,10 +2195,12 @@ async def get_market_sentiment(db: Session = Depends(get_db)):
         cached_data = get_cached_market_data(["SPY"], db)
 
         if "SPY" not in cached_data or cached_data["SPY"].get('price', 0) <= 0:
+            print("Sentiment: SPY not in cache or invalid price, returning neutral")
             return {"sentiment": "Neutral", "score": 50}
 
         # Use cached data for instant response
         change_percent = cached_data["SPY"].get('change_percent', 0)
+        print(f"Sentiment: SPY change_percent = {change_percent}")
 
         # Simple sentiment calculation based on daily change
         if change_percent > 2:
@@ -2217,6 +2219,7 @@ async def get_market_sentiment(db: Session = Depends(get_db)):
             sentiment_label = "Fear"
             score = 25
 
+        print(f"Sentiment: calculated score = {score}")
         return {
             "sentiment": sentiment_label,
             "score": score
@@ -2247,17 +2250,20 @@ async def get_market_sectors(db: Session = Depends(get_db)):
 
         # Get all sector data from CACHE ONLY - no API calls allowed
         sector_data = get_cached_market_data(list(sector_tickers.values()), db)
+        print(f"Sectors: fetched data for {len(sector_data)} tickers")
 
         results = []
         for name, sym in sector_tickers.items():
             if sym in sector_data:
                 change_percent = sector_data[sym].get('change_percent', 0)
+                print(f"Sectors: {name} ({sym}) change_percent = {change_percent}")
                 results.append({
                     "name": name,
                     "change": f"{change_percent:+.2f}%",
                     "positive": bool(change_percent > 0)
                 })
             else:
+                print(f"Sectors: {name} ({sym}) not in cache")
                 # Fallback for missing data
                 results.append({"name": name, "change": "0.00%", "positive": True})
 
@@ -2411,8 +2417,12 @@ async def get_portfolio(
         # Collect all tickers for batch fetching
         tickers = [holding.ticker for holding in holdings]
         
-        # Fetch all prices from cache - instant response, no background updates to avoid DB session issues
-        cached_data = get_market_data_with_cache(tickers) if tickers else {}
+        # Fetch all prices from cache - instant response, handle errors gracefully
+        try:
+            cached_data = get_market_data_with_cache(tickers) if tickers else {}
+        except Exception as e:
+            print(f"Error fetching market data for portfolio: {e}")
+            cached_data = {}
         
         portfolio_data = []
         total_value = 0
