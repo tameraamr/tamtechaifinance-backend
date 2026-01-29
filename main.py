@@ -13,9 +13,9 @@ import random
 import requests
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Float, func, Index
-from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from jose import JWTError, jwt
 import bcrypt
 import re
@@ -41,7 +41,14 @@ if DATABASE_URL.startswith("postgres://"):
 elif DATABASE_URL.startswith("postgresql://"):
     DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
 
-engine = create_engine(DATABASE_URL)
+engine = create_engine(
+    DATABASE_URL,
+    pool_size=20,           # Increased from default 5
+    max_overflow=30,        # Increased from default 10
+    pool_pre_ping=True,     # Test connections before use
+    pool_recycle=3600,      # Recycle connections every hour
+    echo=False              # Disable SQL logging for performance
+)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
@@ -72,7 +79,7 @@ class GuestUsage(Base):
     __tablename__ = "guest_usage"
     ip_address = Column(String, primary_key=True, index=True)
     attempts = Column(Integer, default=0)
-    last_attempt = Column(DateTime, default=datetime.utcnow)
+    last_attempt = Column(DateTime, default=func.now())
 
 # 1. إنشاء جدول لتخزين آخر التحليلات
 class AnalysisHistory(Base):
@@ -182,22 +189,25 @@ except Exception as e:
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env'))
 API_KEY = os.getenv("GOOGLE_API_KEY")
 # ملاحظة: في السيرفر لا توقف التطبيق إذا لم تجد المفتاح فوراً، السيرفر سيحقنه
-if not API_KEY: 
-    print("⚠️ Warning: GOOGLE_API_KEY not found in environment variables.")
-    client = None
-    model_name = None
-else:
-    try:
+try:
+    if not API_KEY: 
+        print("⚠️ Warning: GOOGLE_API_KEY not found in environment variables.")
+        print("   Server will start without Gemini AI functionality.")
+        print("   To enable AI features, set GOOGLE_API_KEY environment variable.")
+        client = None
+        model_name = None
+    else:
         # Initialize new google.genai client
         client = genai.Client(api_key=API_KEY)
         # Use the latest, fastest model for real-time financial analysis
         # gemini-2.5-flash is the newest and most optimized model (January 2026)
         model_name = 'gemini-2.5-flash'
         print("✅ Gemini API initialized with gemini-2.5-flash")
-    except Exception as e:
-        print(f"❌ Error initializing Gemini client: {e}")
-        client = None
-        model_name = None
+except Exception as e:
+    print(f"❌ Error initializing Gemini client: {e}")
+    print("   Server will start without Gemini AI functionality.")
+    client = None
+    model_name = None
 
 # --- Global Market Data Caching Engine ---
 
@@ -208,7 +218,7 @@ def get_cached_market_data(tickers: list, db: Session, include_expired: bool = F
     If tickers is empty, returns all cached data.
     """
     # CRITICAL FIX: Use UTC time to match database timestamps (func.now() uses UTC)
-    ten_minutes_ago = datetime.utcnow() - timedelta(minutes=10)
+    ten_minutes_ago = datetime.now(UTC) - timedelta(minutes=10)
 
     if tickers:
         if include_expired:
@@ -252,7 +262,7 @@ def get_cached_market_data_with_background_update(tickers: list, db: Session, ba
     cached_data = get_cached_market_data(tickers, db)
 
     # Check if any data is missing or stale (>10 min)
-    ten_minutes_ago = datetime.utcnow() - timedelta(minutes=10)
+    ten_minutes_ago = datetime.now(UTC) - timedelta(minutes=10)
     stale_tickers = []
 
     for ticker in tickers:
@@ -501,7 +511,7 @@ def update_market_cache(tickers_data: dict, db: Session):
                 existing.market_cap = data['market_cap']
                 existing.volume = data['volume']
                 existing.asset_type = data['asset_type']
-                existing.last_updated = datetime.utcnow()  # CRITICAL FIX: Use UTC time
+                existing.last_updated = datetime.now(UTC)  # CRITICAL FIX: Use UTC time
             else:
                 # Create new
                 cache_entry = MarketDataCache(
@@ -586,15 +596,26 @@ def get_market_data_with_cache(tickers: list, asset_types: dict = None, db: Sess
         if valid_fresh_data and db:
             if stale_while_revalidate:
                 # Async update for stale-while-revalidate
+                def update_cache_async():
+                    # Create a new session for the async operation
+                    async_db = SessionLocal()
+                    try:
+                        update_market_cache(valid_fresh_data, async_db)
+                        async_db.commit()
+                        print(f"🔄 Stale-while-revalidate: Updated {len(valid_fresh_data)} tickers in background")
+                    except Exception as e:
+                        print(f"⚠️ Async cache update failed: {e}")
+                        async_db.rollback()
+                    finally:
+                        async_db.close()
+
                 try:
                     import threading
-                    def update_cache_async():
-                        update_market_cache(valid_fresh_data, db)
                     thread = threading.Thread(target=update_cache_async, daemon=True)
                     thread.start()
-                    print(f"🔄 Stale-while-revalidate: Updated {len(valid_fresh_data)} tickers in background")
                 except Exception as e:
-                    print(f"⚠️ Async cache update failed: {e}")
+                    print(f"⚠️ Failed to start async cache update thread: {e}")
+                    # Fallback to synchronous update
                     update_market_cache(valid_fresh_data, db)
             else:
                 # Synchronous update for critical data
@@ -829,7 +850,7 @@ def get_password_hash(password):
 
 def create_access_token(data: dict):
     to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    expire = datetime.now(UTC) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
@@ -941,7 +962,7 @@ def register(user: UserCreate, db: Session = Depends(get_db)):
         
         # إنشاء رمز التحقق (UUID آمن)
         verification_token = secrets.token_urlsafe(32)
-        expires_at = datetime.utcnow() + timedelta(hours=24)
+        expires_at = datetime.now(UTC) + timedelta(hours=24)
         
         try:
             token_entry = VerificationToken(
@@ -1109,7 +1130,7 @@ def verify_email(token: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Invalid verification token")
     
     # Check if token has expired
-    if datetime.utcnow() > token_entry.expires_at:
+    if datetime.now(UTC) > token_entry.expires_at:
         db.delete(token_entry)
         db.commit()
         raise HTTPException(status_code=410, detail="Verification token has expired. Please request a new one.")
@@ -1152,7 +1173,7 @@ def resend_verification(current_user: User = Depends(get_current_user_mandatory)
     
     # Create new token
     verification_token = secrets.token_urlsafe(32)
-    expires_at = datetime.utcnow() + timedelta(hours=24)
+    expires_at = datetime.now(UTC) + timedelta(hours=24)
     
     token_entry = VerificationToken(
         user_id=current_user.id,
@@ -1193,7 +1214,7 @@ async def get_user_dashboard_history(
         ).order_by(UserAnalysisHistory.updated_at.desc()).all()
         
         history_items = []
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
         
         for item in user_history:
             # Calculate how old the report is
@@ -1249,7 +1270,7 @@ async def get_historical_analysis(
             raise HTTPException(status_code=404, detail="Analysis not found in your history")
         
         # Check if expired (> 24 hours)
-        age = datetime.utcnow() - user_history.updated_at
+        age = datetime.now(UTC) - user_history.updated_at
         hours_ago = int(age.total_seconds() / 3600)
         is_expired = hours_ago >= 24
         
@@ -1332,7 +1353,7 @@ def get_random_ticker_v2():
         
         return {
             "ticker": ticker,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "pool_size": len(TICKER_POOL),
             "version": "v2"
         }
@@ -1340,7 +1361,7 @@ def get_random_ticker_v2():
         print(f"❌ V2 Error: {e}")
         return {
             "ticker": random.choice(["AAPL", "MSFT", "GOOGL", "JPM", "XOM", "JNJ", "WMT", "PG"]),
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "pool_size": 8,
             "version": "v2-fallback"
         }
@@ -1536,7 +1557,7 @@ async def analyze_stock(
         
         if cached_report and not force_refresh:
             # Check if cache is still valid (within 24 hours)
-            cache_age = datetime.utcnow() - cached_report.updated_at
+            cache_age = datetime.now(UTC) - cached_report.updated_at
             if cache_age < timedelta(hours=24):
                 cache_hit = True
                 analysis_json = json.loads(cached_report.ai_json_data)
@@ -1701,7 +1722,7 @@ async def analyze_stock(
                     if cached_report:
                         # Update existing cache entry
                         cached_report.ai_json_data = json.dumps(analysis_json)
-                        cached_report.updated_at = datetime.utcnow()
+                        cached_report.updated_at = datetime.now(UTC)
                     else:
                         # Create new cache entry with language
                         new_report = AnalysisReport(
@@ -1724,7 +1745,7 @@ async def analyze_stock(
                     ).first()
                     if existing:
                         existing.ai_json_data = json.dumps(analysis_json)
-                        existing.updated_at = datetime.utcnow()
+                        existing.updated_at = datetime.now(UTC)
                         db.commit()
                         print(f"💾 Updated existing cache for {ticker} ({lang})")
                     else:
@@ -1807,7 +1828,7 @@ async def analyze_stock(
         # Calculate cache age for frontend display
         cache_age_hours = 0
         if cached_report:
-            cache_age = datetime.utcnow() - cached_report.updated_at
+            cache_age = datetime.now(UTC) - cached_report.updated_at
             cache_age_hours = round(cache_age.total_seconds() / 3600, 1)
         
         # ========== STEP 5: UPDATE USER ANALYSIS HISTORY (for logged-in users) ==========
@@ -1825,7 +1846,7 @@ async def analyze_stock(
                     user_history.last_price = str(live_financial_data.get('price', 0))
                     user_history.verdict = analysis_json.get('verdict', 'HOLD')
                     user_history.confidence_score = analysis_json.get('confidence_score', 50)
-                    user_history.updated_at = datetime.utcnow()
+                    user_history.updated_at = datetime.now(UTC)
                 else:
                     # Create new record
                     new_user_history = UserAnalysisHistory(
@@ -2543,7 +2564,7 @@ async def get_stock_page_data(
             currency = "USD"
         
         # Calculate cache age
-        cache_age_hours = (datetime.utcnow() - cached_report.created_at).total_seconds() / 3600
+        cache_age_hours = (datetime.now(UTC) - cached_report.created_at).total_seconds() / 3600
         
         # TEASER MODE: Blur high-value data
         # Build chapters from old format if needed
@@ -2849,7 +2870,7 @@ async def get_master_universe_heatmap(background_tasks: BackgroundTasks, db: Ses
         cached_data = get_cached_market_data(all_tickers, db)
 
         # Check data completeness
-        current_time = datetime.utcnow()
+        current_time = datetime.now(UTC)
         complete_data = len(cached_data) == len(all_tickers)
         needs_update = not complete_data
 
@@ -2886,7 +2907,7 @@ async def get_master_universe_heatmap(background_tasks: BackgroundTasks, db: Ses
             "crypto": [],
             "commodities": [],
             "forex": [],
-            "last_updated": datetime.utcnow().isoformat(),
+            "last_updated": datetime.now(UTC).isoformat(),
             "cache_status": "complete" if complete_data else "partial"
         }
 
@@ -2934,8 +2955,8 @@ def warmup_cache_on_startup():
         # Create database session
         db = SessionLocal()
 
-        # Top 100 assets from our ticker pool (first 100)
-        top_100_tickers = TICKER_POOL[:100]
+        # Top 50 assets from our ticker pool (reduced to prevent DB overload)
+        top_100_tickers = TICKER_POOL[:50]
 
         # 🚨 CRITICAL: Also fetch ALL existing portfolio tickers immediately
         portfolio_tickers = db.query(PortfolioHolding.ticker).distinct().all()
@@ -2974,9 +2995,19 @@ def warmup_cache_on_startup():
 
 if __name__ == "__main__":
     import uvicorn
+    import threading
 
-    # URGENT FIX 4: Run cache warm-up before starting server
-    warmup_cache_on_startup()
+    # 🚀 CRITICAL FIX: Start cache warm-up in background thread
+    # This prevents blocking the server startup for 5+ minutes
+    def background_warmup():
+        """Run cache warmup in background thread to not block server startup"""
+        try:
+            warmup_cache_on_startup()
+        except Exception as e:
+            print(f"⚠️ Background cache warmup failed: {e}")
+
+    warmup_thread = threading.Thread(target=background_warmup, daemon=True)
+    warmup_thread.start()
 
     print("🚀 Starting TamtechAI Finance Tool Backend...")
     print("📊 Master Universe Heatmap: ENABLED")
