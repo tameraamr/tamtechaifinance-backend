@@ -144,7 +144,8 @@ class MarketDataCache(Base):
     asset_type = Column(String, index=True)  # 'stock', 'crypto', 'commodity', 'forex'
     name = Column(String)  # Company/asset name
     price = Column(Float)  # Current price
-    change_percent = Column(Float)  # 24h change percentage
+    change_percent = Column(Float)  # 24h change percentage (change_p)
+    sector = Column(String, nullable=True)  # Sector for stocks
     market_cap = Column(Float, nullable=True)  # Market cap (for stocks/crypto)
     volume = Column(Float, nullable=True)  # Trading volume
     last_updated = Column(DateTime, default=func.now(), index=True)
@@ -204,26 +205,80 @@ def get_cached_market_data(tickers: list, db: Session) -> dict:
     """
     Get cached market data for tickers. Returns dict with ticker -> data mapping.
     Only returns data that's less than 10 minutes old.
+    If tickers is empty, returns all cached data.
     """
-    if not tickers:
-        return {}
-
     # CRITICAL FIX: Use UTC time to match database timestamps (func.now() uses UTC)
     ten_minutes_ago = datetime.utcnow() - timedelta(minutes=10)
-    cached_data = db.query(MarketDataCache).filter(
-        MarketDataCache.ticker.in_(tickers),
-        MarketDataCache.last_updated >= ten_minutes_ago
-    ).all()
+    
+    if tickers:
+        cached_data = db.query(MarketDataCache).filter(
+            MarketDataCache.ticker.in_(tickers),
+            MarketDataCache.last_updated >= ten_minutes_ago
+        ).all()
+    else:
+        # Return all cached data if no tickers specified
+        cached_data = db.query(MarketDataCache).filter(
+            MarketDataCache.last_updated >= ten_minutes_ago
+        ).all()
 
     return {item.ticker: {
         'name': item.name,
         'price': item.price,
         'change_percent': item.change_percent,
+        'sector': item.sector,
         'market_cap': item.market_cap,
         'volume': item.volume,
         'asset_type': item.asset_type,
         'last_updated': item.last_updated
     } for item in cached_data}
+
+def get_cached_market_data_with_background_update(tickers: list, db: Session, background_tasks: BackgroundTasks) -> dict:
+    """
+    Cache-first approach: Get data from DB only. If data is older than 10 minutes, trigger background update.
+    Never waits for API - instant response.
+    """
+    if not tickers:
+        return {}
+
+    # Get cached data (only from DB)
+    cached_data = get_cached_market_data(tickers, db)
+
+    # Check if any data is missing or stale (>10 min)
+    ten_minutes_ago = datetime.utcnow() - timedelta(minutes=10)
+    stale_tickers = []
+
+    for ticker in tickers:
+        if ticker not in cached_data:
+            stale_tickers.append(ticker)
+        elif cached_data[ticker]['last_updated'] < ten_minutes_ago:
+            stale_tickers.append(ticker)
+
+    # If any data is stale or missing, trigger background update
+    if stale_tickers:
+        background_tasks.add_task(update_market_data_background, stale_tickers)
+
+    return cached_data
+
+def update_market_data_background(tickers: list):
+    """
+    Background task to fetch and update market data.
+    Creates its own DB session to avoid session conflicts.
+    """
+    db = SessionLocal()
+    try:
+        print(f"🔄 Background update for {len(tickers)} tickers: {tickers[:5]}{'...' if len(tickers) > 5 else ''}")
+        
+        # Fetch fresh data
+        fresh_data = batch_fetch_market_data(tickers)
+        
+        # Update cache
+        update_market_cache(fresh_data, db)
+        
+        print(f"✅ Background update completed for {len(fresh_data)} tickers")
+    except Exception as e:
+        print(f"❌ Background update failed: {e}")
+    finally:
+        db.close()
 
 def batch_fetch_market_data(tickers: list, asset_types: dict = None, chunk_size: int = 50) -> dict:
     """
@@ -274,11 +329,13 @@ def batch_fetch_market_data(tickers: list, asset_types: dict = None, chunk_size:
 
                 market_cap = info.get("marketCap")
                 volume = info.get("volume") or info.get("averageVolume")
+                sector = info.get("sector") if asset_type == 'stock' else None
 
                 data[ticker] = {
                     'name': name,
                     'price': current_price,
                     'change_percent': change_percent,
+                    'sector': sector,
                     'market_cap': market_cap,
                     'volume': volume,
                     'asset_type': asset_type,
@@ -291,6 +348,7 @@ def batch_fetch_market_data(tickers: list, asset_types: dict = None, chunk_size:
                     'name': ticker.upper(),
                     'price': 0,
                     'change_percent': 0,
+                    'sector': None,
                     'market_cap': None,
                     'volume': None,
                     'asset_type': asset_types.get(ticker, 'stock') if asset_types else 'stock',
@@ -313,6 +371,7 @@ def update_market_cache(tickers_data: dict, db: Session):
                 existing.name = data['name']
                 existing.price = data['price']
                 existing.change_percent = data['change_percent']
+                existing.sector = data['sector']
                 existing.market_cap = data['market_cap']
                 existing.volume = data['volume']
                 existing.asset_type = data['asset_type']
@@ -324,6 +383,7 @@ def update_market_cache(tickers_data: dict, db: Session):
                     name=data['name'],
                     price=data['price'],
                     change_percent=data['change_percent'],
+                    sector=data['sector'],
                     market_cap=data['market_cap'],
                     volume=data['volume'],
                     asset_type=data['asset_type']
@@ -1722,7 +1782,7 @@ async def verify_license(request: LicenseRequest, db: Session = Depends(get_db),
         return {"valid": False, "message": "Connection error with verification server"}
     
 @app.get("/market-pulse")
-def get_market_pulse(db: Session = Depends(get_db)):
+def get_market_pulse(background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     try:
         # رموز ياهو فاينانس الرسمية - now using cache
         tickers = {
@@ -1733,9 +1793,8 @@ def get_market_pulse(db: Session = Depends(get_db)):
             "GC=F": "GOLD"
         }
 
-        # URGENT FIX 3: Use CACHE ONLY for instant response - no API calls
-        # Show cached data immediately, no background updates for live-bar
-        market_data = get_cached_market_data(list(tickers.keys()), db)
+        # Use cache-first with background update if needed
+        market_data = get_cached_market_data_with_background_update(list(tickers.keys()), db, background_tasks)
 
         pulse_data = []
         for sym, name in tickers.items():
@@ -2185,14 +2244,14 @@ async def analyze_compare(
 
 
 @app.get("/market-sentiment")
-async def get_market_sentiment(db: Session = Depends(get_db)):
+async def get_market_sentiment(background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     """
     🚀 CACHE-FIRST: Returns sentiment from cache only (no API calls)
     Used by navbar - must be instant
     """
     try:
-        # Get SPY data from CACHE ONLY - no API calls allowed
-        cached_data = get_cached_market_data(["SPY"], db)
+        # Get SPY data from cache with background update if needed
+        cached_data = get_cached_market_data_with_background_update(["SPY"], db, background_tasks)
 
         if "SPY" not in cached_data or cached_data["SPY"].get('price', 0) <= 0:
             print("Sentiment: SPY not in cache or invalid price, returning neutral")
@@ -2202,22 +2261,34 @@ async def get_market_sentiment(db: Session = Depends(get_db)):
         change_percent = cached_data["SPY"].get('change_percent', 0)
         print(f"Sentiment: SPY change_percent = {change_percent}")
 
-        # Simple sentiment calculation based on daily change
-        if change_percent > 2:
+        # Fear & Greed score based on SPY change
+        # Map change_percent to 0-100 scale
+        if change_percent >= 5:
+            score = 100  # Extreme Greed
+        elif change_percent >= 2:
+            score = 75   # Greed
+        elif change_percent >= 0.5:
+            score = 60   # Optimism
+        elif change_percent >= -0.5:
+            score = 50   # Neutral
+        elif change_percent >= -2:
+            score = 40   # Caution
+        elif change_percent >= -5:
+            score = 25   # Fear
+        else:
+            score = 0    # Extreme Fear
+
+        # Label based on score
+        if score >= 75:
             sentiment_label = "Greed"
-            score = 75
-        elif change_percent > 0.5:
+        elif score >= 60:
             sentiment_label = "Optimism"
-            score = 60
-        elif change_percent > -0.5:
+        elif score >= 40:
             sentiment_label = "Neutral"
-            score = 50
-        elif change_percent > -2:
+        elif score >= 25:
             sentiment_label = "Caution"
-            score = 40
         else:
             sentiment_label = "Fear"
-            score = 25
 
         print(f"Sentiment: calculated score = {score}")
         return {
@@ -2230,42 +2301,41 @@ async def get_market_sentiment(db: Session = Depends(get_db)):
 
 
 @app.get("/market-sectors")
-async def get_market_sectors(db: Session = Depends(get_db)):
+async def get_market_sectors(background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     try:
-        # رموز الصناديق التي تمثل كامل قطاعات السوق الأمريكي (11 قطاعاً)
-        sector_tickers = {
-            "Technology": "XLK",
-            "Energy": "XLE",
-            "Financials": "XLF",
-            "Healthcare": "XLV",
-            "Consumer Disc": "XLY",
-            "Industrials": "XLI",
-            "Materials": "XLB",
-            "Real Estate": "XLRE",
-            "Utilities": "XLU",
-            "Communication": "XLC",
-            "Consumer Staples": "XLP",
-            "S&P 500 Index": "SPY",
-        }
-
-        # Get all sector data from CACHE ONLY - no API calls allowed
-        sector_data = get_cached_market_data(list(sector_tickers.values()), db)
-        print(f"Sectors: fetched data for {len(sector_data)} tickers")
+        # Get all cached market data for stocks
+        all_cached_data = get_cached_market_data([], db)  # Empty list to get all
+        
+        # Filter for stocks only and group by sector
+        sector_data = {}
+        for ticker, data in all_cached_data.items():
+            if data['asset_type'] == 'stock':
+                sector = data.get('sector') or "Unknown"
+                if sector not in sector_data:
+                    sector_data[sector] = []
+                sector_data[sector].append(data['change_percent'])
 
         results = []
-        for name, sym in sector_tickers.items():
-            if sym in sector_data:
-                change_percent = sector_data[sym].get('change_percent', 0)
-                print(f"Sectors: {name} ({sym}) change_percent = {change_percent}")
+        for sector, changes in sector_data.items():
+            if changes:
+                avg_change = sum(changes) / len(changes)
                 results.append({
-                    "name": name,
-                    "change": f"{change_percent:+.2f}%",
-                    "positive": bool(change_percent > 0)
+                    "name": sector,
+                    "change": f"{avg_change:+.2f}%",
+                    "positive": bool(avg_change > 0)
                 })
             else:
-                print(f"Sectors: {name} ({sym}) not in cache")
-                # Fallback for missing data
-                results.append({"name": name, "change": "0.00%", "positive": True})
+                results.append({
+                    "name": sector,
+                    "change": "0.00%",
+                    "positive": True
+                })
+
+        # If no sectors found, return default sectors with 0.00%
+        if not results:
+            default_sectors = ["Technology", "Energy", "Financials", "Healthcare", "Consumer Discretionary", 
+                             "Industrials", "Materials", "Real Estate", "Utilities", "Communication Services", "Consumer Staples"]
+            results = [{"name": sector, "change": "0.00%", "positive": True} for sector in default_sectors]
 
         return results
     except Exception as e:
@@ -2406,73 +2476,54 @@ async def get_portfolio(
     """
     📊 GET USER PORTFOLIO (FREE FEATURE)
     Returns all holdings with live prices and P&L calculations.
+    Uses LEFT JOIN between portfolio_holdings and market_data_cache.
     """
     try:
         print(f"Portfolio request for user {current_user.id}")
-        holdings = db.query(PortfolioHolding).filter(
-            PortfolioHolding.user_id == current_user.id
-        ).all()
-        print(f"Found {len(holdings)} holdings")
         
-        # Collect all tickers for batch fetching
-        tickers = [holding.ticker for holding in holdings]
+        # LEFT JOIN using raw SQL for simplicity
+        from sqlalchemy import text
+        query = text("""
+            SELECT ph.*, mdc.price, mdc.change_percent, mdc.sector, mdc.name
+            FROM portfolio_holdings ph
+            LEFT JOIN market_data_cache mdc ON ph.ticker = mdc.ticker
+            WHERE ph.user_id = :user_id
+        """)
         
-        # Fetch all prices from cache - instant response, handle errors gracefully
-        try:
-            cached_data = get_market_data_with_cache(tickers) if tickers else {}
-        except Exception as e:
-            print(f"Error fetching market data for portfolio: {e}")
-            cached_data = {}
+        result = db.execute(query, {"user_id": current_user.id})
+        holdings_data = result.fetchall()
+        
+        print(f"Found {len(holdings_data)} holdings")
         
         portfolio_data = []
         total_value = 0
         total_cost = 0
         
-        for holding in holdings:
-            # Get data from cache
-            price_error = False
-            if holding.ticker in cached_data and cached_data[holding.ticker]:
-                data = cached_data[holding.ticker]
-                current_price = data.get("price", 0)
-                sector = data.get("sector", "Unknown")
-                industry = data.get("industry", "Unknown")
-                company_name = data.get("company_name", holding.ticker)
-                
-                # If price is 0 or invalid, mark as error
-                if current_price == 0:
-                    price_error = True
-            else:
-                # Fallback if not in cache
-                current_price = 0
-                company_name = holding.ticker
-                sector = "Unknown"
-                industry = "Unknown"
-                price_error = True
+        for row in holdings_data:
+            ticker = row[1]  # ticker column
+            quantity = row[3]  # quantity
+            avg_buy_price = row[4]  # avg_buy_price
+            
+            # Cache data (may be None)
+            current_price = row[5] if row[5] is not None else 0  # price
+            change_p = row[6] if row[6] is not None else 0  # change_percent
+            sector = row[7]  # sector
+            company_name = row[8] if row[8] else ticker  # name
             
             # Calculate P&L
-            market_value = current_price * holding.quantity
-            cost_basis = (holding.avg_buy_price or 0) * holding.quantity
-            pnl = market_value - cost_basis if holding.avg_buy_price else 0
+            market_value = current_price * quantity
+            cost_basis = (avg_buy_price or 0) * quantity
+            pnl = market_value - cost_basis if avg_buy_price else 0
             pnl_percent = (pnl / cost_basis * 100) if cost_basis > 0 else 0
             
             total_value += market_value
             total_cost += cost_basis
             
             portfolio_data.append({
-                "id": holding.id,
-                "ticker": holding.ticker,
-                "company_name": company_name,
-                "quantity": holding.quantity,
-                "avg_buy_price": holding.avg_buy_price,
+                "symbol": ticker,
                 "current_price": current_price,
-                "market_value": market_value,
-                "cost_basis": cost_basis,
-                "pnl": pnl,
-                "pnl_percent": pnl_percent,
-                "sector": sector,
-                "industry": industry,
-                "price_error": price_error,
-                "last_updated": data.get("last_updated") if data else None
+                "change_p": change_p,
+                "sector": sector
             })
         
         total_pnl = total_value - total_cost
@@ -2486,10 +2537,11 @@ async def get_portfolio(
                 "total_cost": total_cost,
                 "total_pnl": total_pnl,
                 "total_pnl_percent": total_pnl_percent,
-                "holdings_count": len(holdings)
+                "holdings_count": len(holdings_data)
             }
         }
     except Exception as e:
+        print(f"Portfolio error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
