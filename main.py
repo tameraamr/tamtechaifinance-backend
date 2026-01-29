@@ -2874,6 +2874,21 @@ async def get_master_universe_heatmap(background_tasks: BackgroundTasks, db: Ses
         complete_data = len(cached_data) == len(all_tickers)
         needs_update = not complete_data
 
+        # 🔥 FORCE IMMEDIATE SYNC: If cache is incomplete, fetch missing tickers immediately
+        if not complete_data:
+            missing_tickers = [ticker for ticker in all_tickers if ticker not in cached_data]
+            print(f"🔥 Force syncing {len(missing_tickers)} missing tickers: {missing_tickers}")
+            
+            try:
+                # Fetch missing data immediately
+                missing_data = get_market_data_with_cache(missing_tickers, {ticker: asset_types.get(ticker, 'stocks') for ticker in missing_tickers}, db)
+                cached_data.update(missing_data)
+                db.commit()  # Save the new data
+                complete_data = len(cached_data) == len(all_tickers)
+                print(f"✅ Force sync completed. Cache now has {len(cached_data)}/{len(all_tickers)} items")
+            except Exception as e:
+                print(f"❌ Force sync failed: {e}")
+
         # Check for expired data if we have complete data
         if complete_data:
             for ticker in all_tickers:
