@@ -15,12 +15,19 @@ from dotenv import load_dotenv
 from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Float, func, Index
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
-from datetime import datetime, timedelta, UTC
+from datetime import datetime, timedelta, timezone, UTC
 from jose import JWTError, jwt
 import bcrypt
 import re
 import secrets
 from mailer import send_verification_email
+
+# --- Helper function for datetime handling ---
+def make_datetime_aware(dt):
+    """Convert naive datetime to UTC-aware if needed"""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
 
 # Load environment variables
 load_dotenv()
@@ -218,7 +225,7 @@ def get_cached_market_data(tickers: list, db: Session, include_expired: bool = F
     If tickers is empty, returns all cached data.
     """
     # CRITICAL FIX: Use UTC time to match database timestamps (func.now() uses UTC)
-    ten_minutes_ago = datetime.now(UTC) - timedelta(minutes=10)
+    ten_minutes_ago = datetime.now(timezone.utc) - timedelta(minutes=10)
 
     if tickers:
         if include_expired:
@@ -262,7 +269,7 @@ def get_cached_market_data_with_background_update(tickers: list, db: Session, ba
     cached_data = get_cached_market_data(tickers, db)
 
     # Check if any data is missing or stale (>10 min)
-    ten_minutes_ago = datetime.now(UTC) - timedelta(minutes=10)
+    ten_minutes_ago = datetime.now(timezone.utc) - timedelta(minutes=10)
     stale_tickers = []
 
     for ticker in tickers:
@@ -511,7 +518,7 @@ def update_market_cache(tickers_data: dict, db: Session):
                 existing.market_cap = data['market_cap']
                 existing.volume = data['volume']
                 existing.asset_type = data['asset_type']
-                existing.last_updated = datetime.now(UTC)  # CRITICAL FIX: Use UTC time
+                existing.last_updated = datetime.now(timezone.utc)  # CRITICAL FIX: Use UTC time
             else:
                 # Create new
                 cache_entry = MarketDataCache(
@@ -850,7 +857,7 @@ def get_password_hash(password):
 
 def create_access_token(data: dict):
     to_encode = data.copy()
-    expire = datetime.now(UTC) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
@@ -962,7 +969,7 @@ def register(user: UserCreate, db: Session = Depends(get_db)):
         
         # إنشاء رمز التحقق (UUID آمن)
         verification_token = secrets.token_urlsafe(32)
-        expires_at = datetime.now(UTC) + timedelta(hours=24)
+        expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
         
         try:
             token_entry = VerificationToken(
@@ -1130,7 +1137,7 @@ def verify_email(token: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Invalid verification token")
     
     # Check if token has expired
-    if datetime.now(UTC) > token_entry.expires_at:
+    if datetime.now(timezone.utc) > make_datetime_aware(token_entry.expires_at):
         db.delete(token_entry)
         db.commit()
         raise HTTPException(status_code=410, detail="Verification token has expired. Please request a new one.")
@@ -1173,7 +1180,7 @@ def resend_verification(current_user: User = Depends(get_current_user_mandatory)
     
     # Create new token
     verification_token = secrets.token_urlsafe(32)
-    expires_at = datetime.now(UTC) + timedelta(hours=24)
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
     
     token_entry = VerificationToken(
         user_id=current_user.id,
@@ -1214,7 +1221,7 @@ async def get_user_dashboard_history(
         ).order_by(UserAnalysisHistory.updated_at.desc()).all()
         
         history_items = []
-        now = datetime.now(UTC)
+        now = datetime.utcnow()  # Use offset-naive UTC datetime to match database
         
         for item in user_history:
             # Calculate how old the report is
@@ -1270,7 +1277,7 @@ async def get_historical_analysis(
             raise HTTPException(status_code=404, detail="Analysis not found in your history")
         
         # Check if expired (> 24 hours)
-        age = datetime.now(UTC) - user_history.updated_at
+        age = datetime.now(timezone.utc) - make_datetime_aware(user_history.updated_at)
         hours_ago = int(age.total_seconds() / 3600)
         is_expired = hours_ago >= 24
         
@@ -1353,7 +1360,7 @@ def get_random_ticker_v2():
         
         return {
             "ticker": ticker,
-            "timestamp": datetime.now(UTC).isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "pool_size": len(TICKER_POOL),
             "version": "v2"
         }
@@ -1361,7 +1368,7 @@ def get_random_ticker_v2():
         print(f"❌ V2 Error: {e}")
         return {
             "ticker": random.choice(["AAPL", "MSFT", "GOOGL", "JPM", "XOM", "JNJ", "WMT", "PG"]),
-            "timestamp": datetime.now(UTC).isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "pool_size": 8,
             "version": "v2-fallback"
         }
@@ -1570,7 +1577,7 @@ async def analyze_stock(
         
         if cached_report and not force_refresh:
             # Check if cache is still valid (within 24 hours)
-            cache_age = datetime.now(UTC) - cached_report.updated_at
+            cache_age = datetime.now(timezone.utc) - make_datetime_aware(cached_report.updated_at)
             if cache_age < timedelta(hours=24):
                 cache_hit = True
                 analysis_json = json.loads(cached_report.ai_json_data)
@@ -1735,7 +1742,7 @@ async def analyze_stock(
                     if cached_report:
                         # Update existing cache entry
                         cached_report.ai_json_data = json.dumps(analysis_json)
-                        cached_report.updated_at = datetime.now(UTC)
+                        cached_report.updated_at = datetime.now(timezone.utc)
                     else:
                         # Create new cache entry with language
                         new_report = AnalysisReport(
@@ -1758,7 +1765,7 @@ async def analyze_stock(
                     ).first()
                     if existing:
                         existing.ai_json_data = json.dumps(analysis_json)
-                        existing.updated_at = datetime.now(UTC)
+                        existing.updated_at = datetime.now(timezone.utc)
                         db.commit()
                         print(f"💾 Updated existing cache for {ticker} ({lang})")
                     else:
@@ -1841,7 +1848,7 @@ async def analyze_stock(
         # Calculate cache age for frontend display
         cache_age_hours = 0
         if cached_report:
-            cache_age = datetime.now(UTC) - cached_report.updated_at
+            cache_age = datetime.now(timezone.utc) - make_datetime_aware(cached_report.updated_at)
             cache_age_hours = round(cache_age.total_seconds() / 3600, 1)
         
         # ========== STEP 5: UPDATE USER ANALYSIS HISTORY (for logged-in users) ==========
@@ -1859,7 +1866,7 @@ async def analyze_stock(
                     user_history.last_price = str(live_financial_data.get('price', 0))
                     user_history.verdict = analysis_json.get('verdict', 'HOLD')
                     user_history.confidence_score = analysis_json.get('confidence_score', 50)
-                    user_history.updated_at = datetime.now(UTC)
+                    user_history.updated_at = datetime.now(timezone.utc)
                 else:
                     # Create new record
                     new_user_history = UserAnalysisHistory(
@@ -1956,48 +1963,6 @@ async def verify_license(request: LicenseRequest, db: Session = Depends(get_db),
     except Exception as e: 
         return {"valid": False, "message": "Connection error with verification server"}
     
-@app.get("/market-pulse")
-def get_market_pulse(background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    try:
-        # رموز ياهو فاينانس الرسمية - now using cache
-        tickers = {
-            "^GSPC": "S&P 500",
-            "^IXIC": "NASDAQ",
-            "NVDA": "NVIDIA",
-            "BTC-USD": "Bitcoin",
-            "GC=F": "GOLD"
-        }
-
-        # Use cache-first with background update if needed
-        market_data = get_cached_market_data_with_background_update(list(tickers.keys()), db, background_tasks)
-
-        pulse_data = []
-        for sym, name in tickers.items():
-            if sym in market_data:
-                data = market_data[sym]
-                price = data.get('price', 0)
-                change_percent = data.get('change_percent', 0)
-
-                pulse_data.append({
-                    "name": name,
-                    "price": f"{price:,.2f}" if "Bitcoin" not in name else f"{price:,.0f}",
-                    "change": f"{'+' if change_percent > 0 else ''}{change_percent:.2f}%",
-                    "up": change_percent > 0
-                })
-            else:
-                # Fallback for missing data
-                pulse_data.append({
-                    "name": name,
-                    "price": "Loading...",
-                    "change": "0.00%",
-                    "up": True
-                })
-
-        return pulse_data
-    except Exception as e:
-        print(f"Error fetching pulse: {e}")
-        return []
-
 @app.get("/market-winners-losers")
 def get_market_winners_losers(db: Session = Depends(get_db)):
     """
@@ -2052,7 +2017,7 @@ def get_market_winners_losers(db: Session = Depends(get_db)):
         return {
             "winners": winners,
             "losers": losers,
-            "timestamp": datetime.now(UTC).isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
         
     except Exception as e:
@@ -2565,7 +2530,7 @@ async def get_stock_page_data(
             currency = "USD"
         
         # Calculate cache age
-        cache_age_hours = (datetime.now(UTC) - cached_report.created_at).total_seconds() / 3600
+        cache_age_hours = (datetime.now(timezone.utc) - make_datetime_aware(cached_report.created_at)).total_seconds() / 3600
         
         # TEASER MODE: Blur high-value data
         # Build chapters from old format if needed
@@ -2676,7 +2641,7 @@ async def get_portfolio(
 
             # Check if data is stale (>10 min) or missing
             if not cache_entry or (cache_entry.get('last_updated') and 
-                                 cache_entry['last_updated'] < datetime.now(UTC) - timedelta(minutes=10)):
+                                 make_datetime_aware(cache_entry['last_updated']) < datetime.now(timezone.utc) - timedelta(minutes=10)):
                 stale_tickers.append(ticker)
 
             portfolio_data.append({
@@ -2872,7 +2837,7 @@ async def get_master_universe_heatmap(background_tasks: BackgroundTasks, db: Ses
         cached_data = get_cached_market_data(all_tickers, db)
 
         # Check data completeness and staleness
-        current_time = datetime.now(UTC)
+        current_time = datetime.now(timezone.utc)
         complete_data = len(cached_data) == len(all_tickers)
         needs_background_update = not complete_data
 
@@ -2911,7 +2876,7 @@ async def get_master_universe_heatmap(background_tasks: BackgroundTasks, db: Ses
             "crypto": [],
             "commodities": [],
             "forex": [],
-            "last_updated": datetime.now(UTC).isoformat(),
+            "last_updated": datetime.now(timezone.utc).isoformat(),
             "cache_status": "complete" if complete_data else "partial"
         }
 
@@ -2943,6 +2908,43 @@ async def get_master_universe_heatmap(background_tasks: BackgroundTasks, db: Ses
     except Exception as e:
         print(f"❌ Master Universe Heatmap Error: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch market data: {str(e)}")
+
+
+
+# ==================== CONTACT FORM ENDPOINT ====================
+
+class ContactForm(BaseModel):
+    name: str
+    email: str
+    subject: str
+    message: str
+
+@app.post("/contact")
+async def send_contact_form(contact: ContactForm):
+    """
+    📧 SEND CONTACT FORM EMAIL
+    Sends contact form submissions to tamtecht@gmail.com
+    """
+    try:
+        # Import mailer
+        from mailer import send_contact_email
+
+        # Send email
+        success = send_contact_email(
+            name=contact.name,
+            email=contact.email,
+            subject=contact.subject,
+            message=contact.message
+        )
+
+        if success:
+            return {"success": True, "message": "Message sent successfully!"}
+        else:
+            raise HTTPException(status_code=500, detail="Failed to send message")
+
+    except Exception as e:
+        print(f"Contact form error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to send message")
 
 
 

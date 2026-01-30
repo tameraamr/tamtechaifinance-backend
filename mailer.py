@@ -182,3 +182,110 @@ def send_password_reset_email(user_email: str, user_name: str, token: str) -> bo
     """
     # Placeholder for future password reset functionality
     pass
+
+
+def send_contact_email(name: str, email: str, subject: str, message: str) -> bool:
+    """
+    Send contact form message to tamtecht@gmail.com
+
+    Args:
+        name: Sender's name
+        email: Sender's email
+        subject: Email subject
+        message: Contact message
+
+    Returns:
+        bool: True if email sent successfully, False otherwise
+    """
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>New Contact Form Message - Tamtech Finance</title>
+    </head>
+    <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f8fafc;">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #f8fafc;">
+            <tr>
+                <td align="center" style="padding: 40px 20px;">
+                    <!-- Main Container -->
+                    <table role="presentation" width="600" cellspacing="0" cellpadding="0" border="0" style="max-width: 600px; background-color: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);">
+
+                        <!-- Header -->
+                        <tr>
+                            <td style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 40px 30px; text-align: center;">
+                                <h1 style="margin: 0; font-size: 28px; font-weight: 700; color: #ffffff; letter-spacing: -0.5px;">
+                                    📧 New Contact Message
+                                </h1>
+                                <p style="margin: 10px 0 0 0; font-size: 14px; color: rgba(255, 255, 255, 0.9);">
+                                    Tamtech Finance Support
+                                </p>
+                            </td>
+                        </tr>
+
+                        <!-- Body -->
+                        <tr>
+                            <td style="padding: 40px 30px;">
+                                <h2 style="margin: 0 0 20px 0; font-size: 20px; font-weight: 600; color: #1e293b;">
+                                    Contact Form Submission
+                                </h2>
+
+                                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-bottom: 20px;">
+                                    <tr>
+                                        <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0;">
+                                            <strong style="color: #475569;">Name:</strong>
+                                            <span style="color: #1e293b; margin-left: 10px;">{name}</span>
+                                        </td>
+                                    </tr>
+                                    <tr>
+                                        <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0;">
+                                            <strong style="color: #475569;">Email:</strong>
+                                            <span style="color: #1e293b; margin-left: 10px;">{email}</span>
+                                        </td>
+                                    </tr>
+                                    <tr>
+                                        <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0;">
+                                            <strong style="color: #475569;">Subject:</strong>
+                                            <span style="color: #1e293b; margin-left: 10px;">{subject}</span>
+                                        </td>
+                                    </tr>
+                                </table>
+
+                                <div style="background-color: #f8fafc; padding: 20px; border-radius: 8px; border-left: 4px solid #667eea;">
+                                    <h3 style="margin: 0 0 10px 0; font-size: 16px; font-weight: 600; color: #1e293b;">Message:</h3>
+                                    <p style="margin: 0; font-size: 15px; line-height: 1.6; color: #475569; white-space: pre-wrap;">{message}</p>
+                                </div>
+
+                                <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #e2e8f0; text-align: center;">
+                                    <p style="margin: 0; font-size: 14px; color: #64748b;">
+                                        This message was sent from the Tamtech Finance contact form.
+                                    </p>
+                                </div>
+                            </td>
+                        </tr>
+
+                    </table>
+                </td>
+            </tr>
+        </table>
+    </body>
+    </html>
+    """
+
+    try:
+        params = {
+            "from": f"{SENDER_NAME} <{SENDER_EMAIL}>",
+            "to": ["tamtecht@gmail.com"],  # Send to the specified email
+            "subject": f"Contact Form: {subject}",
+            "html": html_content,
+            "reply_to": email,  # Allow replying to the sender
+        }
+
+        response = resend.Emails.send(params)
+        print(f"✅ Contact form email sent from {email} to tamtecht@gmail.com. ID: {response.get('id')}")
+        return True
+
+    except Exception as e:
+        print(f"❌ Failed to send contact email from {email}: {str(e)}")
+        return False
