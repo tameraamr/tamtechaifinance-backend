@@ -1366,6 +1366,19 @@ def get_random_ticker_v2():
             "version": "v2-fallback"
         }
 
+@app.get("/get-price/{ticker}")
+def get_stock_price(ticker: str):
+    """Get current stock price for Regret Machine"""
+    try:
+        data = get_real_financial_data(ticker)
+        if data and 'current_price' in data:
+            return {"price": data['current_price']}
+        else:
+            return {"error": "Price not found"}, 404
+    except Exception as e:
+        print(f"❌ Price fetch error for {ticker}: {e}")
+        return {"error": "Failed to fetch price"}, 500
+
 # ⚠️⚠️ OLD ENDPOINT - KEEP FOR BACKWARD COMPATIBILITY BUT REDIRECT TO V2 ⚠️⚠️
 @app.get("/suggest-stock")
 def suggest_stock():
