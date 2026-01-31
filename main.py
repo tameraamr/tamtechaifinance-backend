@@ -1636,6 +1636,7 @@ async def analyze_stock(
                         raise HTTPException(status_code=500, detail="AI service not configured - missing API key")
                     print(f"✅ DEBUG: Initializing client with API_KEY starting with {API_KEY[:10]}...")
                     client = genai.Client(api_key=API_KEY, version='v1beta')
+                    print(f"Available models: {client.models.list()}")
                     print("✅ DEBUG: Client initialized successfully")
                 
                 if not client or not model_name:
