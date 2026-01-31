@@ -195,6 +195,7 @@ except Exception as e:
 # --- Gemini Setup ---
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env'))
 API_KEY = os.getenv("GOOGLE_API_KEY")
+print(f"DEBUG: API_KEY loaded: {API_KEY[:10] if API_KEY else 'None'}")
 # ملاحظة: في السيرفر لا توقف التطبيق إذا لم تجد المفتاح فوراً، السيرفر سيحقنه
 try:
     if not API_KEY: 
@@ -1865,7 +1866,9 @@ async def analyze_stock(
         print(f"❌ Unexpected error in analyze endpoint: {e}")
         import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        # Return full traceback for debugging
+        full_traceback = traceback.format_exc()
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}\n\nFull Traceback:\n{full_traceback}")
     
 
 @app.get("/recent-analyses")
