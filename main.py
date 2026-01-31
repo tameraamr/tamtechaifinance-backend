@@ -209,7 +209,7 @@ try:
         # Don't initialize client globally to avoid startup issues
         # Initialize it in functions that need it
         client = None  # Will be initialized when needed
-        model_name = 'gemini-1.5-pro'
+        model_name = 'gemini-2.0-flash'
         print("✅ Gemini API key found, will initialize client when needed")
 except Exception as e:
     print(f"❌ Error with Gemini setup: {e}")
@@ -1635,7 +1635,7 @@ async def analyze_stock(
                         print("❌ DEBUG: No API_KEY found")
                         raise HTTPException(status_code=500, detail="AI service not configured - missing API key")
                     print(f"✅ DEBUG: Initializing client with API_KEY starting with {API_KEY[:10]}...")
-                    client = genai.Client(api_key=API_KEY)
+                    client = genai.Client(api_key=API_KEY, version='v1beta')
                     print("✅ DEBUG: Client initialized successfully")
                 
                 if not client or not model_name:
@@ -1645,9 +1645,10 @@ async def analyze_stock(
                 # Add timeout protection (30 seconds max)
                 import asyncio
                 try:
+                    # Try Gemini 2.0 Flash first
                     response = await asyncio.to_thread(
                         lambda: client.models.generate_content(
-                            model=model_name,
+                            model='gemini-2.0-flash',
                             contents=prompt,
                             config=types.GenerateContentConfig(
                                 response_mime_type="application/json",
@@ -1655,9 +1656,25 @@ async def analyze_stock(
                             )
                         )
                     )
-                except Exception as timeout_err:
-                    if "timeout" in str(timeout_err).lower():
-                        raise Exception("Request timeout - AI took too long")
+                except Exception as model_err:
+                    if "404" in str(model_err) or "not found" in str(model_err).lower() or "model" in str(model_err).lower():
+                        print(f"⚠️ Gemini 2.0 Flash not available, falling back to 1.5 Flash: {model_err}")
+                        try:
+                            response = await asyncio.to_thread(
+                                lambda: client.models.generate_content(
+                                    model='gemini-1.5-flash',
+                                    contents=prompt,
+                                    config=types.GenerateContentConfig(
+                                        response_mime_type="application/json",
+                                        temperature=0.3
+                                    )
+                                )
+                            )
+                        except Exception as fallback_err:
+                            print(f"❌ Fallback also failed: {fallback_err}")
+                            raise fallback_err
+                    else:
+                        raise model_err
                     raise
                 
                 # Parse JSON with repair attempts for malformed responses
@@ -2180,16 +2197,33 @@ async def analyze_compare(
         if not client:
             raise HTTPException(status_code=500, detail="AI service not configured")
         
-        response = await asyncio.to_thread(
-            lambda: client.models.generate_content(
-                model=model_name,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    temperature=0.2
+        try:
+            # Try Gemini 2.0 Flash first
+            response = await asyncio.to_thread(
+                lambda: client.models.generate_content(
+                    model='gemini-2.0-flash',
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        temperature=0.2
+                    )
                 )
             )
-        )
+        except Exception as model_err:
+            if "404" in str(model_err) or "not found" in str(model_err).lower() or "model" in str(model_err).lower():
+                print(f"⚠️ Gemini 2.0 Flash not available, falling back to 1.5 Flash: {model_err}")
+                response = await asyncio.to_thread(
+                    lambda: client.models.generate_content(
+                        model='gemini-1.5-flash',
+                        contents=prompt,
+                        config=types.GenerateContentConfig(
+                            response_mime_type="application/json",
+                            temperature=0.2
+                        )
+                    )
+                )
+            else:
+                raise model_err
         analysis_result = json.loads(response.text)
 
     except json.JSONDecodeError:
@@ -2286,15 +2320,31 @@ async def analyze_compare(
         if not client:
             raise HTTPException(status_code=500, detail="AI service not configured")
         
-        response = await asyncio.to_thread(
-            lambda: client.models.generate_content(
-                model=model_name,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json"
+        try:
+            # Try Gemini 2.0 Flash first
+            response = await asyncio.to_thread(
+                lambda: client.models.generate_content(
+                    model='gemini-2.0-flash',
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json"
+                    )
                 )
             )
-        )
+        except Exception as model_err:
+            if "404" in str(model_err) or "not found" in str(model_err).lower() or "model" in str(model_err).lower():
+                print(f"⚠️ Gemini 2.0 Flash not available, falling back to 1.5 Flash: {model_err}")
+                response = await asyncio.to_thread(
+                    lambda: client.models.generate_content(
+                        model='gemini-1.5-flash',
+                        contents=prompt,
+                        config=types.GenerateContentConfig(
+                            response_mime_type="application/json"
+                        )
+                    )
+                )
+            else:
+                raise model_err
         analysis_result = json.loads(response.text)
 
     except json.JSONDecodeError:
