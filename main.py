@@ -1248,7 +1248,7 @@ async def get_historical_analysis(
         analysis_json = json.loads(cached_report.ai_json_data)
         
         # Get live financial data for chart and current price
-        live_financial_data = get_real_financial_data(ticker)
+        live_financial_data = await get_real_financial_data(ticker)
         
         if not live_financial_data or not live_financial_data.get('price'):
             raise HTTPException(status_code=500, detail="Failed to fetch current market data")
@@ -1325,14 +1325,14 @@ def get_random_ticker_v2():
         }
 
 @app.get("/get-price/{ticker}")
-def get_stock_price(ticker: str):
+async def get_stock_price(ticker: str):
     """Get current stock price for Regret Machine"""
     try:
-        data = get_real_financial_data(ticker)
-        if data and 'current_price' in data:
-            return {"price": data['current_price']}
+        data = await get_real_financial_data(ticker)
+        if data and 'price' in data:
+            return {"price": data['price']}
         else:
-            return {"error": "Price not found"}, 404
+            raise HTTPException(status_code=404, detail="Price not found")
     except Exception as e:
         print(f"❌ Price fetch error for {ticker}: {e}")
         return {"error": "Failed to fetch price"}, 500
@@ -1343,31 +1343,31 @@ def suggest_stock():
     """OLD ENDPOINT - Redirects to V2 for backward compatibility"""
     return get_random_ticker_v2()
 
-def get_real_financial_data(ticker: str):
+async def get_real_financial_data(ticker: str):
     """Fetch stock data with automatic retry on network failures"""
+    import asyncio
     max_retries = 3
     retry_delay = 1  # Start with 1 second
     
     for attempt in range(max_retries):
         try:
-            stock = yf.Ticker(ticker)
+            stock = await asyncio.to_thread(yf.Ticker, ticker)
             try: current_price = stock.fast_info['last_price']
             except: 
-                info = stock.info
+                info = await asyncio.to_thread(lambda: stock.info)
                 current_price = info.get('currentPrice') or info.get('regularMarketPrice')
             
             if not current_price: 
                 if attempt < max_retries - 1:
                     print(f"⚠️ No price found for {ticker}, retrying... (attempt {attempt + 1}/{max_retries})")
-                    import time
-                    time.sleep(retry_delay)
+                    await asyncio.sleep(retry_delay)
                     retry_delay *= 2  # Exponential backoff
                     continue
                 return None
             
-            info = stock.info
-            news = stock.news if hasattr(stock, 'news') else []
-            history = stock.history(period="6mo")
+            info = await asyncio.to_thread(lambda: stock.info)
+            news = await asyncio.to_thread(lambda: stock.news if hasattr(stock, 'news') else [])
+            history = await asyncio.to_thread(lambda: stock.history(period="6mo"))
             chart_data = [{"date": d.strftime('%Y-%m-%d'), "price": round(r['Close'], 2)} for d, r in history.iterrows()]
             
             # Success! Return data
@@ -1550,7 +1550,7 @@ async def analyze_stock(
             print(f"🔬 Generating NEW AI report for {ticker}")
             
             # Get financial data (without price for AI prompt)
-            financial_data_for_ai = get_real_financial_data(ticker)
+            financial_data_for_ai = await get_real_financial_data(ticker)
             
             if not financial_data_for_ai or not financial_data_for_ai.get('price'):
                 raise HTTPException(status_code=404, detail=f"Stock '{ticker}' not found or delisted.")
@@ -1778,7 +1778,7 @@ async def analyze_stock(
         
         # ========== STEP 4: LIVE PRICE INJECTION ==========
         print(f"💹 Fetching LIVE price for {ticker}")
-        live_financial_data = get_real_financial_data(ticker)
+        live_financial_data = await get_real_financial_data(ticker)
         use_cached_price = False
         
         if not live_financial_data or not live_financial_data.get('price'):
@@ -2135,8 +2135,8 @@ async def analyze_compare(
 
     try:
         # 2. جلب بيانات السهمين
-        data1 = get_real_financial_data(ticker1)
-        data2 = get_real_financial_data(ticker2)
+        data1 = await get_real_financial_data(ticker1)
+        data2 = await get_real_financial_data(ticker2)
         
         if not data1 or not data2:
             raise HTTPException(status_code=404, detail="One or both stocks not found")
@@ -2238,8 +2238,8 @@ async def analyze_compare(
         raise HTTPException(status_code=500, detail=str(e))
     try:
         # 2. جلب بيانات السهمين
-        data1 = get_real_financial_data(ticker1)
-        data2 = get_real_financial_data(ticker2)
+        data1 = await get_real_financial_data(ticker1)
+        data2 = await get_real_financial_data(ticker2)
         
         if not data1 or not data2:
             raise HTTPException(status_code=404, detail="One or both stocks not found")
@@ -3143,10 +3143,10 @@ async def get_stock_quote(ticker: str):
     """Fetch basic stock quote data from Yahoo Finance"""
     try:
         ticker = ticker.upper()
-        stock = yf.Ticker(ticker)
+        stock = await asyncio.to_thread(yf.Ticker, ticker)
         
         # Get basic info
-        info = stock.info
+        info = await asyncio.to_thread(lambda: stock.info)
         current_price = info.get('currentPrice') or info.get('regularMarketPrice')
         
         if not current_price:
@@ -3170,10 +3170,10 @@ async def get_stock_chart(ticker: str, range: str = "1d", interval: str = "1d"):
     """Fetch stock chart data from Yahoo Finance"""
     try:
         ticker = ticker.upper()
-        stock = yf.Ticker(ticker)
+        stock = await asyncio.to_thread(yf.Ticker, ticker)
         
         # Get historical data
-        history = stock.history(period=range, interval=interval)
+        history = await asyncio.to_thread(lambda: stock.history(period=range, interval=interval))
         
         if history.empty:
             raise HTTPException(status_code=404, detail=f"No chart data for {ticker}")
