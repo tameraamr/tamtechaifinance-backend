@@ -207,7 +207,7 @@ try:
     else:
         genai.configure(api_key=API_KEY)
         model = None  # Will be initialized when needed
-        model_name = 'gemini-1.5-flash'
+        model_name = 'gemini-1.5-pro'
         print("✅ Gemini API key found, will initialize client when needed")
 except Exception as e:
     print(f"❌ Error with Gemini setup: {e}")
@@ -1442,7 +1442,7 @@ async def search_ticker(ticker: str):
         print(f"Search Error: {e}")
         return []
 
-@app.get("/analyze/{ticker}")
+@app.get("/api/analyze/{ticker}")
 async def analyze_stock(
     ticker: str, 
     request: Request, 
@@ -2091,7 +2091,7 @@ async def generate_og_image(ticker: str, db: Session = Depends(get_db)):
 
 
 # --- Comparison Route (Costs 2 Credits) ---
-@app.get("/analyze-compare/{ticker1}/{ticker2}")
+@app.get("/api/analyze-compare/{ticker1}/{ticker2}")
 async def analyze_compare(
     ticker1: str, 
     ticker2: str, 
@@ -3136,7 +3136,7 @@ if __name__ == "__main__":
 
 # ========== NEW ENDPOINTS FOR FRONTEND DATA FETCHING ==========
 
-@app.get("/stock-quote/{ticker}")
+@app.get("/api/stock-quote/{ticker}")
 async def get_stock_quote(ticker: str):
     """Fetch basic stock quote data from Yahoo Finance"""
     try:
@@ -3163,7 +3163,7 @@ async def get_stock_quote(ticker: str):
         print(f"Quote fetch error for {ticker}: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch stock quote")
 
-@app.get("/stock-chart/{ticker}")
+@app.get("/api/stock-chart/{ticker}")
 async def get_stock_chart(ticker: str, range: str = "1d", interval: str = "1d"):
     """Fetch stock chart data from Yahoo Finance"""
     try:
