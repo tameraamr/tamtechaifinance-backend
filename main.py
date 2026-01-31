@@ -204,14 +204,13 @@ try:
         client = None
         model_name = None
     else:
-        # Initialize new google.genai client
-        client = genai.Client(api_key=API_KEY)
-        # Use the latest, fastest model for real-time financial analysis
-        # gemini-2.5-flash is the newest and most optimized model (January 2026)
+        # Don't initialize client globally to avoid startup issues
+        # Initialize it in functions that need it
+        client = None  # Will be initialized when needed
         model_name = 'gemini-2.5-flash'
-        print("✅ Gemini API initialized with gemini-2.5-flash")
+        print("✅ Gemini API key found, will initialize client when needed")
 except Exception as e:
-    print(f"❌ Error initializing Gemini client: {e}")
+    print(f"❌ Error with Gemini setup: {e}")
     print("   Server will start without Gemini AI functionality.")
     client = None
     model_name = None
@@ -2948,6 +2947,163 @@ async def send_contact_form(contact: ContactForm):
 
 
 
+# ==================== WHALE ALERT ENDPOINTS ====================
+
+class WhaleAlert(Base):
+    __tablename__ = "whale_alerts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    ticker = Column(String, index=True)
+    alert_type = Column(String)  # 'volume_spike' or 'large_transaction' or 'both'
+    volume = Column(Float, nullable=True)
+    avg_volume_30d = Column(Float, nullable=True)
+    volume_ratio = Column(Float, nullable=True)
+    transaction_value = Column(Float, nullable=True)
+    direction = Column(String, nullable=True)  # 'up' or 'down' or null
+    ai_insight = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+@app.get("/whale-alerts")
+async def get_whale_alerts(limit: int = 10):
+    """
+    📊 GET WHALE ALERTS
+    Returns recent whale alerts from database
+    """
+    try:
+        db = SessionLocal()
+        alerts = db.query(WhaleAlert).order_by(WhaleAlert.created_at.desc()).limit(limit).all()
+        db.close()
+
+        return {
+            "alerts": [
+                {
+                    "id": alert.id,
+                    "ticker": alert.ticker,
+                    "alert_type": alert.alert_type,
+                    "volume": alert.volume,
+                    "avg_volume_30d": alert.avg_volume_30d,
+                    "volume_ratio": alert.volume_ratio,
+                    "transaction_value": alert.transaction_value,
+                    "direction": alert.direction,
+                    "ai_insight": alert.ai_insight,
+                    "created_at": alert.created_at.isoformat()
+                }
+                for alert in alerts
+            ]
+        }
+
+    except Exception as e:
+        print(f"Whale alerts error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch whale alerts")
+
+def generate_template_insight(alert_type: str, ticker: str, transaction_value: float = None) -> str:
+    """
+    🎯 GENERATE TEMPLATE-BASED INSIGHT
+    Returns a random template key for whale alerts
+    """
+    import random
+
+    if alert_type == "volume_spike":
+        return "volumeSpike"
+    elif alert_type == "large_transaction":
+        return "largeTransaction"
+    elif alert_type == "both":
+        return "both"
+    
+    return "volumeSpike"  # fallback
+
+@app.post("/check-whale-activity")
+async def check_whale_activity():
+    """
+    🐳 CHECK WHALE ACTIVITY
+    Scans market data for whale activity and generates alerts
+    """
+    try:
+        db = SessionLocal()
+
+        # Get cached market data for all tickers
+        cached_data = get_cached_market_data([], db)
+
+        alerts_created = 0
+        alerts = []
+
+        for ticker, data in cached_data.items():
+            if not data or 'price' not in data:
+                continue
+
+            current_price = data['price']
+            volume = data.get('volume', 0)
+            avg_volume_30d = data.get('avg_volume_30d', 0)
+
+            # Skip if no volume data
+            if volume == 0 or avg_volume_30d == 0:
+                continue
+
+            volume_ratio = volume / avg_volume_30d
+            transaction_value = current_price * volume
+
+            alert_type = None
+            ai_insight = None
+
+            # Check for volume spike (>200%)
+            if volume_ratio > 2.0:
+                # Check for large transaction (>$1M)
+                if transaction_value > 1000000:
+                    alert_type = "both"
+                    ai_insight = generate_template_insight("both", ticker, transaction_value)
+                else:
+                    alert_type = "volume_spike"
+                    ai_insight = generate_template_insight("volume_spike", ticker)
+            # Check for large transaction only
+            elif transaction_value > 1000000:
+                alert_type = "large_transaction"
+                ai_insight = generate_template_insight("large_transaction", ticker, transaction_value)
+
+            if alert_type:
+                # Create alert in database
+                alert = WhaleAlert(
+                    ticker=ticker,
+                    alert_type=alert_type,
+                    volume=volume,
+                    avg_volume_30d=avg_volume_30d,
+                    volume_ratio=volume_ratio,
+                    transaction_value=transaction_value,
+                    ai_insight=ai_insight
+                )
+                db.add(alert)
+                alerts_created += 1
+
+                alerts.append({
+                    "id": alert.id,
+                    "ticker": ticker,
+                    "alert_type": alert_type,
+                    "volume": volume,
+                    "avg_volume_30d": avg_volume_30d,
+                    "volume_ratio": volume_ratio,
+                    "transaction_value": transaction_value,
+                    "ai_insight": ai_insight,
+                    "created_at": alert.created_at.isoformat()
+                })
+
+        db.commit()
+        db.close()
+
+        return {
+            "success": True,
+            "alerts_created": alerts_created,
+            "alerts": alerts
+        }
+
+    except Exception as e:
+        print(f"Whale activity check error: {e}")
+        try:
+            db.close()
+        except:
+            pass
+        raise HTTPException(status_code=500, detail="Failed to check whale activity")
+
+
+
 # ==================== SERVER STARTUP ====================
 
 def warmup_cache_on_startup():
@@ -3001,19 +3157,6 @@ def warmup_cache_on_startup():
 
 if __name__ == "__main__":
     import uvicorn
-    import threading
-
-    # 🚀 CRITICAL FIX: Start cache warm-up in background thread
-    # This prevents blocking the server startup for 5+ minutes
-    def background_warmup():
-        """Run cache warmup in background thread to not block server startup"""
-        try:
-            warmup_cache_on_startup()
-        except Exception as e:
-            print(f"⚠️ Background cache warmup failed: {e}")
-
-    warmup_thread = threading.Thread(target=background_warmup, daemon=True)
-    warmup_thread.start()
 
     print("🚀 Starting TamtechAI Finance Tool Backend...")
     print("📊 Master Universe Heatmap: ENABLED")
@@ -3022,7 +3165,7 @@ if __name__ == "__main__":
     print("📖 Docs: http://localhost:8000/docs")
     uvicorn.run(
         "main:app",
-        host="0.0.0.0",
+        host="127.0.0.1",
         port=8000,
         reload=False,
         log_level="info"
