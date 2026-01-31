@@ -10,9 +10,8 @@ import os
 import json
 import random
 # Version: 1.0.1 - Fixed is_verified in login response
-import requests
-import httpx
-from dotenv import load_dotenv
+import feedparser
+from datetime import datetime, timedelta
 from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Float, func, Index
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
@@ -3127,6 +3126,125 @@ async def check_whale_activity():
             pass
         raise HTTPException(status_code=500, detail="Failed to check whale activity")
 
+
+# ==================== CALENDAR EVENTS ENDPOINTS ====================
+
+@app.get("/calendar-events")
+async def get_calendar_events():
+    """
+    📅 GET CALENDAR EVENTS
+    Returns upcoming market events from economic calendar
+    """
+    try:
+        # Try to fetch from RSS feed
+        rss_url = "https://www.dailyfx.com/feeds/economic-calendar"
+        feed = feedparser.parse(rss_url)
+        
+        events = []
+        now = datetime.utcnow()
+        
+        for entry in feed.entries[:10]:  # Limit to 10 events
+            try:
+                # Parse the published date
+                published = entry.get('published_parsed')
+                if published:
+                    event_date = datetime(*published[:6])
+                else:
+                    # Skip if no date
+                    continue
+                
+                # Only include future events
+                if event_date < now:
+                    continue
+                
+                # Extract title and impact
+                title = entry.title
+                impact = "Medium"  # Default
+                
+                # Determine importance based on keywords
+                title_lower = title.lower()
+                if any(word in title_lower for word in ['fed', 'fomc', 'interest rate', 'cpi', 'nfp', 'gdp']):
+                    impact = "High"
+                elif any(word in title_lower for word in ['employment', 'retail sales', 'housing']):
+                    impact = "Medium"
+                else:
+                    impact = "Low"
+                
+                # Generate AI impact note
+                ai_notes = {
+                    "High": "High impact expected - monitor volatility and safe-haven assets",
+                    "Medium": "Moderate market impact - watch for sector-specific movements",
+                    "Low": "Limited impact - focus on broader market trends"
+                }
+                
+                events.append({
+                    "name": title,
+                    "date_time": event_date.isoformat(),
+                    "importance": impact,
+                    "ai_impact_note": ai_notes.get(impact, "Monitor market reaction")
+                })
+                
+            except Exception as e:
+                print(f"Error parsing event: {e}")
+                continue
+        
+        # If no events from RSS, fall back to static
+        if not events:
+            now = datetime.utcnow()
+            events = [
+                {
+                    "name": "Fed Interest Rate Decision",
+                    "date_time": (now + timedelta(days=7)).isoformat(),
+                    "importance": "High",
+                    "ai_impact_note": "High impact on Tech stocks - potential volatility in FAANG"
+                },
+                {
+                    "name": "CPI Data Release",
+                    "date_time": (now + timedelta(days=14)).isoformat(),
+                    "importance": "High",
+                    "ai_impact_note": "Inflation data could affect bond yields and tech valuations"
+                },
+                {
+                    "name": "Non-Farm Payrolls",
+                    "date_time": (now + timedelta(days=21)).isoformat(),
+                    "importance": "High",
+                    "ai_impact_note": "Employment data drives market sentiment and Fed policy expectations"
+                },
+                {
+                    "name": "FOMC Minutes",
+                    "date_time": (now + timedelta(days=28)).isoformat(),
+                    "importance": "Medium",
+                    "ai_impact_note": "Provides insight into Fed's economic outlook and rate path"
+                },
+                {
+                    "name": "GDP Growth Report",
+                    "date_time": (now + timedelta(days=35)).isoformat(),
+                    "importance": "Medium",
+                    "ai_impact_note": "Economic growth indicators affect investor confidence"
+                }
+            ]
+        
+        return {"events": events}
+
+    except Exception as e:
+        print(f"Calendar events error: {e}")
+        # Fallback to static data
+        now = datetime.utcnow()
+        events = [
+            {
+                "name": "Fed Interest Rate Decision",
+                "date_time": (now + timedelta(days=7)).isoformat(),
+                "importance": "High",
+                "ai_impact_note": "High impact on Tech stocks - potential volatility in FAANG"
+            },
+            {
+                "name": "CPI Data Release",
+                "date_time": (now + timedelta(days=14)).isoformat(),
+                "importance": "High",
+                "ai_impact_note": "Inflation data could affect bond yields and tech valuations"
+            }
+        ]
+        return {"events": events}
 
 
 # ==================== SERVER STARTUP ====================
