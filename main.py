@@ -10,12 +10,15 @@ import os
 import json
 import random
 # Version: 1.0.1 - Fixed is_verified in login response
+import requests
+import httpx
+from dotenv import load_dotenv
 import feedparser
 from datetime import datetime, timedelta
 from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Float, func, Index
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
-from datetime import datetime, timedelta, timezone, UTC
+from datetime import timezone, UTC
 from jose import JWTError, jwt
 import bcrypt
 import re
