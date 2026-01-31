@@ -3,8 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from typing import Optional
-from google import genai
-from google.genai import types
+import google.generativeai as genai
 import yfinance as yf
 import os
 import json
@@ -202,13 +201,12 @@ try:
         print("⚠️ Warning: GOOGLE_API_KEY not found in environment variables.")
         print("   Server will start without Gemini AI functionality.")
         print("   To enable AI features, set GOOGLE_API_KEY environment variable.")
-        client = None
+        model = None
         model_name = None
     else:
-        # Don't initialize client globally to avoid startup issues
-        # Initialize it in functions that need it
-        client = None  # Will be initialized when needed
-        model_name = 'gemini-2.5-flash'
+        genai.configure(api_key=API_KEY)
+        model = None  # Will be initialized when needed
+        model_name = 'gemini-1.5-flash'
         print("✅ Gemini API key found, will initialize client when needed")
 except Exception as e:
     print(f"❌ Error with Gemini setup: {e}")
@@ -1629,25 +1627,24 @@ async def analyze_stock(
             try:
                 # Initialize client if not already done
                 global client
-                if not client:
+                if not model:
                     if not API_KEY:
                         print("❌ DEBUG: No API_KEY found")
                         raise HTTPException(status_code=500, detail="AI service not configured - missing API key")
-                    print(f"✅ DEBUG: Initializing client with API_KEY starting with {API_KEY[:10]}...")
-                    client = genai.Client(api_key=API_KEY)
-                    print("✅ DEBUG: Client initialized successfully")
+                    print(f"✅ DEBUG: Initializing model with API_KEY starting with {API_KEY[:10]}...")
+                    model = genai.GenerativeModel(model_name)
+                    print("✅ DEBUG: Model initialized successfully")
                 
-                if not client or not model_name:
-                    print("❌ DEBUG: Client or model_name is None")
+                if not model:
+                    print("❌ DEBUG: Model is None")
                     raise HTTPException(status_code=500, detail="AI service not configured")
                 
                 # Add timeout protection (30 seconds max)
                 import asyncio
                 try:
-                    response = await client.models.generate_content_async(
-                        model=model_name,
-                        contents=prompt,
-                        config=types.GenerateContentConfig(
+                    response = await model.generate_content_async(
+                        prompt,
+                        generation_config=genai.types.GenerationConfig(
                             response_mime_type="application/json",
                             temperature=0.3  # Lower temperature for more consistent JSON formatting
                         )
@@ -2172,13 +2169,12 @@ async def analyze_compare(
         Return strictly JSON with keys: 'verdict' (the long essay), 'winner', 'comparison_summary'.
         """
         
-        if not client or not model_name:
+        if not model:
             raise HTTPException(status_code=500, detail="AI service not configured")
         
-        response = await client.models.generate_content_async(
-            model=model_name,
-            contents=prompt,
-            config=types.GenerateContentConfig(
+        response = await model.generate_content_async(
+            prompt,
+            generation_config=genai.types.GenerationConfig(
                 response_mime_type="application/json",
                 temperature=0.2
             )
@@ -2276,13 +2272,12 @@ async def analyze_compare(
         Return strictly JSON with keys: 'verdict' (the long essay), 'winner', 'comparison_summary'.
         """
         
-        if not client or not model_name:
+        if not model:
             raise HTTPException(status_code=500, detail="AI service not configured")
         
-        response = await client.models.generate_content_async(
-            model=model_name,
-            contents=prompt,
-            config=types.GenerateContentConfig(
+        response = await model.generate_content_async(
+            prompt,
+            generation_config=genai.types.GenerationConfig(
                 response_mime_type="application/json"
             )
         )
@@ -3138,7 +3133,7 @@ if __name__ == "__main__":
 
 # ========== NEW ENDPOINTS FOR FRONTEND DATA FETCHING ==========
 
-@app.get("/api/stock-quote/{ticker}")
+@app.get("/stock-quote/{ticker}")
 async def get_stock_quote(ticker: str):
     """Fetch basic stock quote data from Yahoo Finance"""
     try:
@@ -3165,7 +3160,7 @@ async def get_stock_quote(ticker: str):
         print(f"Quote fetch error for {ticker}: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch stock quote")
 
-@app.get("/api/stock-chart/{ticker}")
+@app.get("/stock-chart/{ticker}")
 async def get_stock_chart(ticker: str, range: str = "1d", interval: str = "1d"):
     """Fetch stock chart data from Yahoo Finance"""
     try:
