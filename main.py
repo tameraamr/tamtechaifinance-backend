@@ -11,6 +11,7 @@ import json
 import random
 # Version: 1.0.1 - Fixed is_verified in login response
 import requests
+import httpx
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Float, func, Index
 from sqlalchemy.orm import declarative_base
@@ -1274,12 +1275,13 @@ async def get_historical_analysis(
 
 # 👇👇👇 أضف هذا الـ Endpoint الجديد هنا 👇👇👇
 @app.get("/search-ticker/{query}")
-def search_ticker(query: str):
+async def search_ticker(query: str):
     try:
         url = f"https://query2.finance.yahoo.com/v1/finance/search?q={query}"
         headers = {'User-Agent': 'Mozilla/5.0'}
-        response = requests.get(url, headers=headers)
-        data = response.json()
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, headers=headers)
+            data = response.json()
         
         suggestions = []
         if 'quotes' in data:
@@ -1418,14 +1420,15 @@ def get_real_financial_data(ticker: str):
     return None
 
 @app.get("/search-ticker/{ticker}")
-def search_ticker(ticker: str):
+async def search_ticker(ticker: str):
     """جلب اقتراحات الأسهم الحقيقية من Yahoo Finance"""
     try:
         # نستخدم طلب البحث الرسمي من ياهو لضمان الدقة
         url = f"https://query2.finance.yahoo.com/v1/finance/search?q={ticker}"
         headers = {'User-Agent': 'Mozilla/5.0'}
-        response = requests.get(url, headers=headers)
-        data = response.json()
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, headers=headers)
+            data = response.json()
         
         suggestions = []
         for res in data.get('quotes', []):
@@ -1641,7 +1644,7 @@ async def analyze_stock(
                 # Add timeout protection (30 seconds max)
                 import asyncio
                 try:
-                    response = client.models.generate_content(
+                    response = await client.models.generate_content_async(
                         model=model_name,
                         contents=prompt,
                         config=types.GenerateContentConfig(
@@ -1888,9 +1891,10 @@ async def verify_license(request: LicenseRequest, db: Session = Depends(get_db),
     PRODUCT_ID = "APVOhGVIRQbt7xx1qGXtPg==" 
     try:
         # Send request to Gumroad to verify and increment usage counter
-        response = requests.post("https://api.gumroad.com/v2/licenses/verify",
-            data={"product_id": PRODUCT_ID, "license_key": request.license_key, "increment_uses_count": "true"})
-        data = response.json()
+        async with httpx.AsyncClient() as client:
+            response = await client.post("https://api.gumroad.com/v2/licenses/verify",
+                data={"product_id": PRODUCT_ID, "license_key": request.license_key, "increment_uses_count": "true"})
+            data = response.json()
         
         # Verify success and no refund
         if data.get("success") == True and not data.get("purchase", {}).get("refunded"):
@@ -2171,7 +2175,7 @@ async def analyze_compare(
         if not client or not model_name:
             raise HTTPException(status_code=500, detail="AI service not configured")
         
-        response = client.models.generate_content(
+        response = await client.models.generate_content_async(
             model=model_name,
             contents=prompt,
             config=types.GenerateContentConfig(
@@ -2275,7 +2279,7 @@ async def analyze_compare(
         if not client or not model_name:
             raise HTTPException(status_code=500, detail="AI service not configured")
         
-        response = client.models.generate_content(
+        response = await client.models.generate_content_async(
             model=model_name,
             contents=prompt,
             config=types.GenerateContentConfig(
