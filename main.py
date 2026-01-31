@@ -748,19 +748,20 @@ app = FastAPI()
 # 👇 CORS Configuration - Updated for httpOnly cookie authentication
 origins = [
     "http://localhost:3000",
+    "http://localhost:3001",
     "https://tamtech-frontend.vercel.app",
     "https://tamtech-finance.com",
     "https://www.tamtech-finance.com",
 ]
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins, # ✅ Must specify exact origins when using credentials (not "*")
-    allow_credentials=True, # ✅ Required for httpOnly cookies
-    allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=["*"]
-)
+# app.add_middleware(
+#     CORSMiddleware,
+#     allow_origins=origins, # ✅ Must specify exact origins when using credentials (not "*")
+#     allow_credentials=True, # ✅ Required for httpOnly cookies
+#     allow_methods=["*"],
+#     allow_headers=["*"],
+#     expose_headers=["*"]
+# )
 
 # ========== SECURITY MIDDLEWARE - Block Malicious Scanners ==========
 from collections import defaultdict
@@ -778,51 +779,7 @@ blocked_ips = set()
 @app.middleware("http")
 async def security_middleware(request: Request, call_next):
     """Block malicious scanner requests and implement rate limiting"""
-    path = request.url.path.lower()
-    
-    # Get client IP
-    x_forwarded_for = request.headers.get("x-forwarded-for")
-    client_ip = x_forwarded_for.split(",")[0].strip() if x_forwarded_for else request.client.host
-    
-    # 1. Check if IP is permanently blocked
-    if client_ip in blocked_ips:
-        print(f"🚫 Blocked IP attempted access: {client_ip}")
-        return JSONResponse(status_code=403, content={"detail": "Access denied"})
-    
-    # 2. Block malicious scanner paths
-    malicious_patterns = [
-        "wp-admin", "wp-login", "wordpress", ".env", "config.php", 
-        "xmlrpc.php", ".git", "phpMyAdmin", "admin.php", "setup.php",
-        "wp-config", "db_config", ".htaccess", "backup.sql"
-    ]
-    
-    if any(pattern in path for pattern in malicious_patterns):
-        print(f"🚨 SECURITY ALERT: Malicious scan detected from {client_ip} - Path: {path}")
-        # Add to blocked IPs after 3 malicious attempts
-        blocked_ips.add(client_ip)
-        return JSONResponse(status_code=403, content={"detail": "Forbidden"})
-    
-    # 3. Rate limiting for /analyze endpoint
-    if "/analyze/" in path and request.method == "GET":
-        current_time = time.time()
-        # Clean old requests outside the time window
-        rate_limit_storage[client_ip] = [
-            timestamp for timestamp in rate_limit_storage[client_ip]
-            if current_time - timestamp < RATE_LIMIT_WINDOW
-        ]
-        
-        # Check if limit exceeded
-        if len(rate_limit_storage[client_ip]) >= MAX_ANALYZE_REQUESTS:
-            print(f"⚠️ Rate limit exceeded for {client_ip} on {path}")
-            return JSONResponse(
-                status_code=429,
-                content={"detail": "Too many requests. Please wait a minute and try again."}
-            )
-        
-        # Add current request timestamp
-        rate_limit_storage[client_ip].append(current_time)
-    
-    # Continue with request
+    # Temporarily disabled for debugging
     response = await call_next(request)
     return response
 
@@ -831,16 +788,9 @@ async def security_middleware(request: Request, call_next):
 async def root():
     return {"status": "ok", "message": "TamtechAI Finance API"}
 
-@app.get("/health")
-async def health_check():
-    """Check if API and Gemini are working"""
-    gemini_status = "configured" if (client and model_name) else "not_configured"
-    return {
-        "status": "healthy",
-        "gemini_api": gemini_status,
-        "model": model_name if model_name else "none",
-        "api_key_present": bool(API_KEY)
-    }
+@app.get("/test")
+async def test_endpoint():
+    return {"status": "ok"}
 
 # --- Helpers ---
 def get_db():
@@ -1674,7 +1624,18 @@ async def analyze_stock(
 """
         
             try:
+                # Initialize client if not already done
+                global client
+                if not client:
+                    if not API_KEY:
+                        print("❌ DEBUG: No API_KEY found")
+                        raise HTTPException(status_code=500, detail="AI service not configured - missing API key")
+                    print(f"✅ DEBUG: Initializing client with API_KEY starting with {API_KEY[:10]}...")
+                    client = genai.Client(api_key=API_KEY)
+                    print("✅ DEBUG: Client initialized successfully")
+                
                 if not client or not model_name:
+                    print("❌ DEBUG: Client or model_name is None")
                     raise HTTPException(status_code=500, detail="AI service not configured")
                 
                 # Add timeout protection (30 seconds max)
@@ -3171,6 +3132,65 @@ if __name__ == "__main__":
         log_level="info"
     )
 
+# ========== NEW ENDPOINTS FOR FRONTEND DATA FETCHING ==========
 
+@app.get("/api/stock-quote/{ticker}")
+async def get_stock_quote(ticker: str):
+    """Fetch basic stock quote data from Yahoo Finance"""
+    try:
+        ticker = ticker.upper()
+        stock = yf.Ticker(ticker)
+        
+        # Get basic info
+        info = stock.info
+        current_price = info.get('currentPrice') or info.get('regularMarketPrice')
+        
+        if not current_price:
+            raise HTTPException(status_code=404, detail=f"Stock {ticker} not found")
+        
+        return {
+            "symbol": ticker,
+            "price": current_price,
+            "change": info.get('regularMarketChange', 0),
+            "changePercent": info.get('regularMarketChangePercent', 0),
+            "marketCap": info.get('marketCap'),
+            "volume": info.get('regularMarketVolume'),
+            "companyName": info.get('longName', ticker)
+        }
+    except Exception as e:
+        print(f"Quote fetch error for {ticker}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch stock quote")
 
-
+@app.get("/api/stock-chart/{ticker}")
+async def get_stock_chart(ticker: str, range: str = "1d", interval: str = "1d"):
+    """Fetch stock chart data from Yahoo Finance"""
+    try:
+        ticker = ticker.upper()
+        stock = yf.Ticker(ticker)
+        
+        # Get historical data
+        history = stock.history(period=range, interval=interval)
+        
+        if history.empty:
+            raise HTTPException(status_code=404, detail=f"No chart data for {ticker}")
+        
+        chart_data = []
+        for date, row in history.iterrows():
+            chart_data.append({
+                "date": date.strftime('%Y-%m-%d %H:%M:%S'),
+                "open": round(row['Open'], 2),
+                "high": round(row['High'], 2),
+                "low": round(row['Low'], 2),
+                "close": round(row['Close'], 2),
+                "volume": int(row['Volume'])
+            })
+        
+        return {
+            "symbol": ticker,
+            "range": range,
+            "interval": interval,
+            "data": chart_data
+        }
+    except Exception as e:
+        print(f"Chart fetch error for {ticker}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch chart data")
