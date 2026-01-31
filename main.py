@@ -147,6 +147,17 @@ class PortfolioHolding(Base):
     avg_buy_price = Column(Float, nullable=True)  # Optional: average purchase price
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+
+# 6. Calendar Events Cache - Weekly economic calendar cache (Using raw SQL instead of ORM)
+# class CalendarEvent(Base):
+#     __tablename__ = "calendar_events"
+#     id = Column(Integer, primary_key=True)
+#     name = Column(String, nullable=False)
+#     date_time = Column(DateTime, nullable=False)
+#     importance = Column(String, nullable=False)  # High, Medium, Low
+#     ai_impact_note = Column(Text)
+#     created_at = Column(DateTime, default=func.now())
+#     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
     
     # Composite index for user_id + ticker (one row per user per ticker)
     __table_args__ = (
@@ -3132,53 +3143,64 @@ async def check_whale_activity():
 
 # ==================== CALENDAR EVENTS ENDPOINTS ====================
 
-@app.get("/calendar-events")
-async def get_calendar_events():
+def sync_calendar_events(db: Session):
     """
-    📅 GET CALENDAR EVENTS
-    Returns upcoming market events from economic calendar
+    Sync weekly calendar events from RSS feeds and cache in database
+    Only updates if cache is older than 24 hours
     """
     try:
+        # Check if we need to update (last update within 24 hours) using raw SQL
+        result = db.execute(text("SELECT MAX(updated_at) as last_update FROM calendar_events")).fetchone()
+        now = datetime.utcnow()
+
+        if result and result[0]:
+            last_update = result[0]
+            if isinstance(last_update, str):
+                last_update = datetime.fromisoformat(last_update.replace('Z', '+00:00'))
+            if (now - last_update.replace(tzinfo=None)) < timedelta(hours=24):
+                print("📅 Calendar cache is fresh (updated within 24 hours)")
+                return
+
+        print("📅 Syncing calendar events from RSS feeds...")
+
         events = []
-        
+
         # Try multiple RSS sources
         rss_sources = [
             "https://www.forexfactory.com/ffcal_week_this.xml",
             "https://www.dailyfx.com/feeds/economic-calendar",
             "https://www.investing.com/rss/economic_calendar.rss"
         ]
-        
+
         feed_data = None
         for url in rss_sources:
             try:
                 feed = feedparser.parse(url)
                 if feed.entries:
                     feed_data = feed
-                    print(f"Successfully loaded RSS from: {url}")
+                    print(f"✅ Successfully loaded RSS from: {url}")
                     break
             except Exception as e:
-                print(f"Failed to load RSS from {url}: {e}")
+                print(f"❌ Failed to load RSS from {url}: {e}")
                 continue
-        
-        now = datetime.utcnow()
-        
+
         if feed_data and feed_data.entries:
-            # Parse RSS entries
-            for entry in feed_data.entries[:15]:  # Get more entries
+            # Parse RSS entries for the next 7 days
+            for entry in feed_data.entries[:30]:  # Get more entries
                 try:
                     title = entry.title
-                    
+
                     # Try to extract date from title or use published date
                     event_date = None
-                    
-                    # Look for date patterns in title (e.g., "Jan 31", "02/01", etc.)
+
+                    # Look for date patterns in title
                     import re
                     date_patterns = [
                         r'(\w{3}\s+\d{1,2})',  # "Jan 31"
                         r'(\d{1,2}/\d{1,2})',  # "01/31"
                         r'(\d{4}-\d{2}-\d{2})'  # "2026-01-31"
                     ]
-                    
+
                     for pattern in date_patterns:
                         match = re.search(pattern, title)
                         if match:
@@ -3197,12 +3219,12 @@ async def get_calendar_events():
                                 break
                             except:
                                 continue
-                    
+
                     # If no date found in title, use published date
                     if not event_date and hasattr(entry, 'published_parsed') and entry.published_parsed:
                         event_date = datetime(*entry.published_parsed[:6])
-                    
-                    if event_date and event_date >= now:
+
+                    if event_date and event_date >= now and (event_date - now) <= timedelta(days=7):
                         # Determine importance
                         title_lower = title.lower()
                         if any(word in title_lower for word in ['fed', 'fomc', 'interest rate', 'cpi', 'nfp', 'gdp', 'unemployment', 'jobs']):
@@ -3211,49 +3233,58 @@ async def get_calendar_events():
                             importance = "Medium"
                         else:
                             importance = "Low"
-                        
+
                         # Generate AI impact note
                         ai_notes = {
                             "High": "High impact expected - monitor volatility and safe-haven assets",
-                            "Medium": "Moderate market impact - watch for sector-specific movements", 
+                            "Medium": "Moderate market impact - watch for sector-specific movements",
                             "Low": "Limited impact - focus on broader market trends"
                         }
-                        
+
                         events.append({
                             "name": title,
-                            "date_time": event_date.isoformat(),
+                            "date_time": event_date,
                             "importance": importance,
                             "ai_impact_note": ai_notes.get(importance, "Monitor market reaction")
                         })
-                        
+
                 except Exception as e:
-                    print(f"Error parsing RSS entry: {e}")
+                    print(f"❌ Error parsing RSS entry: {e}")
                     continue
-        
+
         # If no events from RSS, generate realistic upcoming events
         if not events:
-            print("No RSS events found, generating realistic calendar events")
-            events = generate_realistic_calendar_events()
-        
-        # Sort by date and limit to 10
-        events.sort(key=lambda x: x['date_time'])
-        events = events[:10]
-        
-        return {"events": events}
+            print("⚠️ No RSS events found, generating realistic calendar events")
+            events = generate_realistic_calendar_events_for_cache()
+
+        # Clear old events and insert new ones using raw SQL
+        db.execute(text("DELETE FROM calendar_events"))
+        for event in events:
+            db.execute(text("""
+                INSERT INTO calendar_events (name, date_time, importance, ai_impact_note, updated_at)
+                VALUES (:name, :date_time, :importance, :ai_impact_note, CURRENT_TIMESTAMP)
+            """), {
+                "name": event["name"],
+                "date_time": event["date_time"],
+                "importance": event["importance"],
+                "ai_impact_note": event["ai_impact_note"]
+            })
+
+        db.commit()
+        print(f"✅ Calendar sync complete: {len(events)} events cached")
 
     except Exception as e:
-        print(f"Calendar events error: {e}")
-        # Final fallback
-        return {"events": generate_realistic_calendar_events()}
+        print(f"❌ Calendar sync error: {e}")
+        db.rollback()
 
 
-def generate_realistic_calendar_events():
+def generate_realistic_calendar_events_for_cache():
     """
-    Generate realistic upcoming economic events for the current week
+    Generate realistic upcoming economic events for the next 7 days (for caching)
     """
     now = datetime.utcnow()
     events = []
-    
+
     # Base events that typically occur
     base_events = [
         {"name": "Initial Jobless Claims", "importance": "Low", "hour": 8, "minute": 30},
@@ -3272,34 +3303,34 @@ def generate_realistic_calendar_events():
         {"name": "Core PCE Price Index", "importance": "High", "hour": 8, "minute": 30},
         {"name": "Federal Budget", "importance": "Low", "hour": 14, "minute": 0}
     ]
-    
-    # Generate events for the next 7 days, ensuring today and tomorrow have events
+
+    # Generate events for the next 7 days
     for i in range(7):
         event_date = now + timedelta(days=i)
-        
+
         # Skip weekends for most economic data (except some Fed events)
         if event_date.weekday() >= 5 and i > 0:  # Saturday/Sunday, but allow today
             continue
-            
+
         # Add more events for today and tomorrow
         if i == 0:  # Today
             num_events = random.randint(2, 4)
-        elif i == 1:  # Tomorrow  
+        elif i == 1:  # Tomorrow
             num_events = random.randint(2, 3)
         else:
             num_events = random.randint(1, 2)
-        
+
         # Select events and assign random times
         selected_events = random.sample(base_events, min(num_events, len(base_events)))
-        
+
         for event in selected_events:
             # Vary the time slightly
             hour_variation = random.randint(-30, 30)  # ±30 minutes
             event_hour = max(8, min(16, event["hour"] + hour_variation // 60))
             event_minute = (event["minute"] + hour_variation) % 60
-            
+
             event_datetime = event_date.replace(hour=event_hour, minute=event_minute, second=0, microsecond=0)
-            
+
             # Only include future events
             if event_datetime > now:
                 ai_notes = {
@@ -3307,17 +3338,52 @@ def generate_realistic_calendar_events():
                     "Medium": "Moderate market impact - watch for sector-specific movements",
                     "Low": "Limited impact - focus on broader market trends"
                 }
-                
+
                 events.append({
                     "name": event["name"],
-                    "date_time": event_datetime.isoformat(),
+                    "date_time": event_datetime,
                     "importance": event["importance"],
                     "ai_impact_note": ai_notes[event["importance"]]
                 })
-    
+
     # Sort by date
     events.sort(key=lambda x: x['date_time'])
     return events
+
+
+@app.get("/calendar-events")
+async def get_calendar_events(db: Session = Depends(get_db)):
+    """
+    📅 GET CALENDAR EVENTS
+    Returns cached weekly economic calendar events
+    """
+    try:
+        # Sync calendar if needed
+        sync_calendar_events(db)
+
+        # Get events from cache using raw SQL
+        result = db.execute(text("""
+            SELECT name, date_time, importance, ai_impact_note
+            FROM calendar_events
+            WHERE date_time >= CURRENT_TIMESTAMP
+            ORDER BY date_time
+            LIMIT 20
+        """)).fetchall()
+
+        events = []
+        for row in result:
+            events.append({
+                "name": row[0],
+                "date_time": row[1].isoformat() if hasattr(row[1], 'isoformat') else str(row[1]),
+                "importance": row[2],
+                "ai_impact_note": row[3]
+            })
+
+        return {"events": events}
+
+    except Exception as e:
+        print(f"❌ Calendar events error: {e}")
+        return {"events": []}
 
 
 # ==================== SERVER STARTUP ====================
