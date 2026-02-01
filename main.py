@@ -9,6 +9,7 @@ import yfinance as yf
 import os
 import json
 import random
+import asyncio
 # Version: 1.0.1 - Fixed is_verified in login response
 import requests
 import httpx
@@ -1749,8 +1750,27 @@ async def analyze_stock(
         {{
             "chapter_1_the_business": "Headline: [Translate 'The Business DNA']. [Write 400+ words detailed essay]",
             "chapter_2_financials": "Headline: [Translate 'Financial Health']. [Write 400+ words detailed essay]",
+           
+           
             "chapter_3_valuation": "Headline: [Translate 'Valuation Check']. [Write 400+ words detailed essay]",
+        "upcoming_catalysts": {{
+                "next_earnings_date": "State the estimated or confirmed date (e.g., Oct 28, 2025)",
+                "event_importance": "High/Medium/Low",
+                "analyst_expectation": "Briefly state what the market expects from this event"
+            }},
+
+            "competitors": [
+                {{ "name": "Competitor 1 Name", "ticker": "TICKER1", "strength": "Main advantage over {ticker}" }},
+                {{ "name": "Competitor 2 Name", "ticker": "TICKER2", "strength": "Main advantage over {ticker}" }}
+            ],
+
+            "ownership_insights": {{
+                "institutional_sentiment": "Describe if institutions are buying/holding",
+                "insider_trading": "Briefly mention recent insider activity if known",
+                "dividend_safety": "Analyze if the current dividend yield is sustainable"
+            }}, 
             
+               
             "news_analysis": [
         {{
             "headline": "Title of the news",
@@ -1883,6 +1903,8 @@ async def analyze_stock(
                             status_code=500,
                             detail="AI analysis temporarily unavailable. Your credit has been refunded."
                         )
+                
+                print(f"✅ Analysis JSON ready with {len(analysis_json)} fields")
                 
                 # Save to cache with language (upsert pattern)
                 try:
