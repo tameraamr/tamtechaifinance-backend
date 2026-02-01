@@ -83,7 +83,12 @@ class User(Base):
     address = Column(String, nullable=True) # اختياري
     
     credits = Column(Integer, default=0)
-    is_verified = Column(Integer, default=0, nullable=True)  # 0 = not verified, 1 = verified 
+    is_verified = Column(Integer, default=0, nullable=True)  # 0 = not verified, 1 = verified
+    
+    # Pro Subscription Fields (Gumroad Integration)
+    is_pro = Column(Integer, default=0, nullable=True)  # 0 = free user, 1 = pro subscriber
+    subscription_expiry = Column(DateTime, nullable=True)  # When pro subscription expires (UTC)
+    gumroad_license_key = Column(String, nullable=True)  # Store license key for verification 
 
 # هذا الجدول يسجل IP الزائر وكم مرة استخدم الموقع
 class GuestUsage(Base):
@@ -196,6 +201,36 @@ try:
         print("✅ Migration complete: is_verified column added")
     else:
         print("✅ is_verified column already exists")
+    
+    # Add is_pro column if it doesn't exist
+    if 'is_pro' not in users_columns:
+        print("⚙️ Running migration: Adding is_pro column to users table...")
+        with engine.connect() as conn:
+            conn.execute(text("ALTER TABLE users ADD COLUMN is_pro INTEGER DEFAULT 0"))
+            conn.commit()
+        print("✅ Migration complete: is_pro column added")
+    else:
+        print("✅ is_pro column already exists")
+    
+    # Add subscription_expiry column if it doesn't exist
+    if 'subscription_expiry' not in users_columns:
+        print("⚙️ Running migration: Adding subscription_expiry column to users table...")
+        with engine.connect() as conn:
+            conn.execute(text("ALTER TABLE users ADD COLUMN subscription_expiry TIMESTAMP"))
+            conn.commit()
+        print("✅ Migration complete: subscription_expiry column added")
+    else:
+        print("✅ subscription_expiry column already exists")
+    
+    # Add gumroad_license_key column if it doesn't exist
+    if 'gumroad_license_key' not in users_columns:
+        print("⚙️ Running migration: Adding gumroad_license_key column to users table...")
+        with engine.connect() as conn:
+            conn.execute(text("ALTER TABLE users ADD COLUMN gumroad_license_key VARCHAR"))
+            conn.commit()
+        print("✅ Migration complete: gumroad_license_key column added")
+    else:
+        print("✅ gumroad_license_key column already exists")
         
 except Exception as e:
     print(f"⚠️ Migration warning: {e}")
@@ -1156,21 +1191,25 @@ def login(response: Response, form_data: OAuth2PasswordRequestForm = Depends(), 
             "phone_number": user.phone_number,
             "country": user.country,
             "address": user.address,
-            "is_verified": user.is_verified  # ✅ CRITICAL: Include verification status
+            "is_verified": user.is_verified,  # ✅ CRITICAL: Include verification status
+            "is_pro": user.is_pro,  # ✨ PRO STATUS
+            "subscription_expiry": user.subscription_expiry.isoformat() if user.subscription_expiry else None
         }
     }
 
 @app.get("/users/me")
 def read_users_me(current_user: User = Depends(get_current_user_mandatory)):
     return {
-        "email": current_user.email, 
-        "credits": current_user.credits,
-        "is_verified": current_user.is_verified,
+        "email": current_user.email,
         "first_name": current_user.first_name,
         "last_name": current_user.last_name,
         "phone_number": current_user.phone_number,
         "country": current_user.country,
-        "address": current_user.address
+        "address": current_user.address,
+        "credits": current_user.credits,
+        "is_verified": current_user.is_verified,
+        "is_pro": current_user.is_pro,
+        "subscription_expiry": current_user.subscription_expiry.isoformat() if current_user.subscription_expiry else None
     }
 
 @app.post("/logout")
@@ -1620,19 +1659,23 @@ async def analyze_stock(
     """
     🔒 STRICT MONETIZATION & CACHING LOGIC + EMAIL VERIFICATION REQUIRED
     
-    Every request costs 1 credit (no exceptions).
+    PRO BYPASS LOGIC:
+    - Pro users (is_pro=True, valid subscription): Unlimited analysis, NO credit deduction
+    - Free users: Every request costs 1 credit (no exceptions)
+    
     Cache is used only for speed and AI cost savings.
     Live price is ALWAYS injected before response.
     
-    force_refresh=True: Skip 6-hour cache, always call AI, costs 1 credit
+    force_refresh=True: Skip 6-hour cache, always call AI, costs 1 credit (free users only)
     """
     
     try:
         ticker = ticker.upper()
         
-        # ========== STEP 1: CREDIT CHECK & DEDUCTION (STRICT POLICY) ==========
+        # ========== STEP 1: AUTHENTICATION & PRO CHECK ==========
         is_guest = current_user is None
         credits_left = 0
+        is_pro_user = False
         
         if current_user:
             # Email verification check for logged-in users
@@ -1648,16 +1691,23 @@ async def analyze_stock(
                 db.commit()
                 return {"message": "Dev Mode: 1000 Credits Added"}
             
-            # Check credit balance
-            if current_user.credits <= 0:
-                raise HTTPException(status_code=402, detail="No credits left")
+            # 🎯 PRO USER CHECK: Bypass credit system if Pro subscription is active
+            is_pro_user = is_user_pro_active(current_user)
             
-            # 💳 IMMEDIATE DEDUCTION - Before any processing
-            current_user.credits -= 1
-            db.commit()
-            credits_left = current_user.credits
-            
-            print(f"✅ User {current_user.email} charged 1 credit. Remaining: {credits_left}")
+            if is_pro_user:
+                print(f"✅ PRO USER: {current_user.email} - Unlimited access (no credit deduction)")
+                credits_left = current_user.credits  # Return current credits but don't deduct
+            else:
+                # Free user - apply credit check
+                if current_user.credits <= 0:
+                    raise HTTPException(status_code=402, detail="No credits left")
+                
+                # 💳 IMMEDIATE DEDUCTION - Before any processing
+                current_user.credits -= 1
+                db.commit()
+                credits_left = current_user.credits
+                
+                print(f"✅ User {current_user.email} charged 1 credit. Remaining: {credits_left}")
         else:
             # Guest IP-based limiting
             x_forwarded_for = request.headers.get("x-forwarded-for")
@@ -2298,7 +2348,7 @@ async def generate_og_image(ticker: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail="Failed to generate image")
 
 
-# --- Comparison Route (Costs 2 Credits) ---
+# --- Comparison Route (PRO: Unlimited | FREE: Costs 2 Credits) ---
 @app.get("/analyze-compare/{ticker1}/{ticker2}")
 async def analyze_compare(
     ticker1: str, 
@@ -2308,7 +2358,10 @@ async def analyze_compare(
     db: Session = Depends(get_db), 
     current_user: User = Depends(get_current_user_optional)
 ):
-    # --- 🛡️ نظام الحماية المتطور (IP & Credits) ---
+    # --- 🛡️ ENHANCED PROTECTION (IP & Credits) + PRO BYPASS ---
+    is_pro_user = False
+    credits_left = 0
+    
     if current_user:
         # Email verification check for logged-in users
         if current_user.is_verified != 1:
@@ -2317,8 +2370,22 @@ async def analyze_compare(
                 detail="Please verify your email to access this feature. Check your inbox for the verification link."
             )
         
-        if current_user.credits < 2:
-            raise HTTPException(status_code=402, detail="Insufficient credits. 2 credits required.")
+        # 🎯 PRO USER CHECK: Unlimited battles for Pro subscribers
+        is_pro_user = is_user_pro_active(current_user)
+        
+        if is_pro_user:
+            print(f"✅ PRO USER BATTLE: {current_user.email} - Unlimited access")
+            credits_left = current_user.credits  # Return credits but don't deduct
+        else:
+            # Free user - check and deduct credits
+            if current_user.credits < 2:
+                raise HTTPException(status_code=402, detail="Insufficient credits. 2 credits required.")
+            
+            # Deduct credits upfront for free users
+            current_user.credits -= 2
+            db.commit()
+            credits_left = current_user.credits
+            print(f"✅ User {current_user.email} charged 2 credits for battle. Remaining: {credits_left}")
     else:
         # التقاط الـ IP الحقيقي للمستخدم خلف بروكسي Railway
         x_forwarded_for = request.headers.get("x-forwarded-for")
@@ -2534,45 +2601,44 @@ async def analyze_compare(
         analysis_result = json.loads(response.text)
 
     except json.JSONDecodeError:
-        # REFUND CREDIT
-        current_user.credits += 2
-        db.commit()
-        print(f"❌ Battle Error - Refunded 2 credits to {current_user.email}. Balance: {current_user.credits}")
+        # REFUND CREDIT (only for free users)
+        if current_user and not is_pro_user:
+            current_user.credits += 2
+            db.commit()
+            print(f"❌ Battle Error - Refunded 2 credits to {current_user.email}. Balance: {current_user.credits}")
         raise HTTPException(
             status_code=500,
-            detail="Battle analysis temporarily unavailable. Your credits have been refunded."
+            detail="Battle analysis temporarily unavailable. Your credits have been refunded." if not is_pro_user else "Battle analysis temporarily unavailable. Please try again."
         )
     except Exception as e:
         error_msg = str(e)
         print(f"Battle AI Error: {error_msg}")
         
-        # REFUND CREDIT
-        current_user.credits += 2
-        db.commit()
-        print(f"❌ Battle Error - Refunded 2 credits to {current_user.email}. Balance: {current_user.credits}")
+        # REFUND CREDIT (only for free users)
+        if current_user and not is_pro_user:
+            current_user.credits += 2
+            db.commit()
+            print(f"❌ Battle Error - Refunded 2 credits to {current_user.email}. Balance: {current_user.credits}")
         
         if "404" in error_msg or "NOT_FOUND" in error_msg:
-            user_message = "Battle service updating. Your credits have been refunded."
+            user_message = "Battle service updating. Your credits have been refunded." if not is_pro_user else "Battle service updating. Please try again."
         elif "403" in error_msg or "PERMISSION" in error_msg:
-            user_message = "Service temporarily unavailable. Your credits have been refunded."
+            user_message = "Service temporarily unavailable. Your credits have been refunded." if not is_pro_user else "Service temporarily unavailable. Please try again."
         elif "429" in error_msg:
-            user_message = "High demand. Your credits have been refunded. Please wait."
+            user_message = "High demand. Your credits have been refunded. Please wait." if not is_pro_user else "High demand. Please wait."
         else:
-            user_message = "Battle analysis unavailable. Your credits have been refunded."
+            user_message = "Battle analysis unavailable. Your credits have been refunded." if not is_pro_user else "Battle analysis unavailable. Please try again."
         
         raise HTTPException(status_code=500, detail=user_message)
     
     try:
-
-        # 4. خصم الكريدت وتحديث الداتابيز
-        current_user.credits -= 2
-        db.commit()
-
+        # Return results with appropriate credits_left value
         return {
             "analysis": analysis_result,
             "stock1": data1,
             "stock2": data2,
-            "credits_left": current_user.credits
+            "credits_left": credits_left,
+            "is_pro": is_pro_user
         }
     except Exception as e:
         db.rollback()
@@ -2812,12 +2878,21 @@ async def get_portfolio(
     db: Session = Depends(get_db)
 ):
     """
-    📊 GET USER PORTFOLIO (FREE FEATURE)
+    📊 GET USER PORTFOLIO (PRO FEATURE)
     Returns all holdings with live prices using unified cache source.
+    REQUIREMENT: Pro subscription required for full portfolio access
     URGENT FIX: If any ticker shows $0.00, trigger immediate background fetch
     """
     try:
-        print(f"Portfolio request for user {current_user.id}")
+        # 🔒 PRO ACCESS CHECK
+        is_pro = is_user_pro_active(current_user)
+        if not is_pro:
+            raise HTTPException(
+                status_code=403,
+                detail="Portfolio feature requires Pro subscription. Upgrade to access unlimited portfolio tracking."
+            )
+        
+        print(f"Portfolio request for PRO user {current_user.id}")
 
         # Get user's portfolio holdings
         holdings = db.query(PortfolioHolding).filter(
@@ -2886,9 +2961,18 @@ async def add_portfolio_holding(
     db: Session = Depends(get_db)
 ):
     """
-    ➕ ADD/UPDATE PORTFOLIO HOLDING (FREE FEATURE)
+    ➕ ADD/UPDATE PORTFOLIO HOLDING (PRO FEATURE)
+    Pro users can add unlimited holdings to their portfolio
     """
     try:
+        # 🔒 PRO ACCESS CHECK
+        is_pro = is_user_pro_active(current_user)
+        if not is_pro:
+            raise HTTPException(
+                status_code=403,
+                detail="Portfolio feature requires Pro subscription. Upgrade to save unlimited stocks."
+            )
+        
         ticker = ticker.upper()
         
         # Check if holding already exists
@@ -2928,9 +3012,17 @@ async def delete_portfolio_holding(
     db: Session = Depends(get_db)
 ):
     """
-    🗑️ DELETE PORTFOLIO HOLDING (FREE FEATURE)
+    🗑️ DELETE PORTFOLIO HOLDING (PRO FEATURE)
     """
     try:
+        # 🔒 PRO ACCESS CHECK
+        is_pro = is_user_pro_active(current_user)
+        if not is_pro:
+            raise HTTPException(
+                status_code=403,
+                detail="Portfolio feature requires Pro subscription."
+            )
+        
         holding = db.query(PortfolioHolding).filter(
             PortfolioHolding.id == holding_id,
             PortfolioHolding.user_id == current_user.id
@@ -3624,6 +3716,167 @@ if __name__ == "__main__":
         reload=False,
         log_level="info"
     )
+
+# ==================== GUMROAD PRO SUBSCRIPTION ENDPOINTS ====================
+
+@app.post("/verify-gumroad-license")
+async def verify_gumroad_license(
+    license_request: LicenseRequest,
+    current_user: User = Depends(get_current_user_mandatory),
+    db: Session = Depends(get_db)
+):
+    """
+    🔐 VERIFY GUMROAD LICENSE KEY
+    Calls Gumroad API to verify subscription status and activates Pro membership
+    """
+    try:
+        license_key = license_request.license_key.strip()
+        
+        # Gumroad API verification
+        gumroad_product_id = "KiRGh7xlBdFtz2mwCto_DA=="
+        gumroad_api_url = "https://api.gumroad.com/v2/licenses/verify"
+        
+        payload = {
+            "product_id": gumroad_product_id,
+            "license_key": license_key
+        }
+        
+        # Call Gumroad API
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(gumroad_api_url, data=payload)
+            
+        if response.status_code != 200:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid license key or Gumroad verification failed"
+            )
+        
+        result = response.json()
+        
+        # Check if license is valid
+        if not result.get("success"):
+            raise HTTPException(
+                status_code=400,
+                detail="License key is invalid or has been used"
+            )
+        
+        purchase_data = result.get("purchase", {})
+        
+        # Check subscription status
+        subscription_ended_at = purchase_data.get("subscription_ended_at")
+        subscription_cancelled_at = purchase_data.get("subscription_cancelled_at")
+        subscription_failed_at = purchase_data.get("subscription_failed_at")
+        
+        # Determine if subscription is active
+        is_active = True
+        expiry_date = None
+        
+        if subscription_ended_at:
+            # Subscription has ended
+            expiry_date = datetime.fromisoformat(subscription_ended_at.replace("Z", "+00:00"))
+            if expiry_date < datetime.now(timezone.utc):
+                is_active = False
+        elif subscription_cancelled_at or subscription_failed_at:
+            # Subscription cancelled or failed
+            is_active = False
+        else:
+            # Active subscription - set expiry to 1 month from now (will be updated on next verification)
+            expiry_date = datetime.now(timezone.utc) + timedelta(days=30)
+        
+        if not is_active:
+            raise HTTPException(
+                status_code=400,
+                detail="Subscription is no longer active. Please renew your membership."
+            )
+        
+        # Activate Pro subscription for user
+        current_user.is_pro = 1
+        current_user.subscription_expiry = expiry_date
+        current_user.gumroad_license_key = license_key
+        db.commit()
+        
+        print(f"✅ Pro activated for {current_user.email} - Expires: {expiry_date}")
+        
+        return {
+            "success": True,
+            "message": "Pro subscription activated successfully!",
+            "is_pro": True,
+            "subscription_expiry": expiry_date.isoformat() if expiry_date else None
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        print(f"❌ Gumroad verification error: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to verify license. Please try again later."
+        )
+
+
+@app.get("/subscription-status")
+async def get_subscription_status(
+    current_user: User = Depends(get_current_user_mandatory),
+    db: Session = Depends(get_db)
+):
+    """
+    📊 GET USER'S PRO SUBSCRIPTION STATUS
+    Returns current subscription details
+    """
+    try:
+        # Check if subscription has expired
+        is_pro_active = False
+        if current_user.is_pro == 1 and current_user.subscription_expiry:
+            expiry_aware = make_datetime_aware(current_user.subscription_expiry)
+            if expiry_aware > datetime.now(timezone.utc):
+                is_pro_active = True
+            else:
+                # Subscription expired - deactivate
+                current_user.is_pro = 0
+                db.commit()
+                print(f"⚠️ Pro subscription expired for {current_user.email}")
+        
+        return {
+            "is_pro": is_pro_active,
+            "subscription_expiry": current_user.subscription_expiry.isoformat() if current_user.subscription_expiry else None,
+            "credits": current_user.credits
+        }
+    except Exception as e:
+        print(f"Error fetching subscription status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def is_user_pro_active(user: User) -> bool:
+    """
+    Helper function to check if user has active Pro subscription
+    Returns True if user is Pro and subscription hasn't expired
+    """
+    if not user or user.is_pro != 1:
+        return False
+    
+    if not user.subscription_expiry:
+        return False
+    
+    expiry_aware = make_datetime_aware(user.subscription_expiry)
+    return expiry_aware > datetime.now(timezone.utc)
+
+
+@app.get("/check-pdf-access")
+async def check_pdf_access(
+    current_user: User = Depends(get_current_user_mandatory),
+):
+    """
+    🔒 CHECK IF USER HAS ACCESS TO PDF DOWNLOAD (PRO ONLY)
+    Returns whether user can download PDF reports
+    """
+    is_pro = is_user_pro_active(current_user)
+    return {
+        "has_access": is_pro,
+        "is_pro": is_pro,
+        "message": "PDF download available" if is_pro else "Upgrade to Pro to download PDF reports"
+    }
+
 
 # ========== NEW ENDPOINTS FOR FRONTEND DATA FETCHING ==========
 
