@@ -197,6 +197,7 @@ class Article(Base):
     author = Column(String, default="TamtechAI Research")  # Author name
     hero_emoji = Column(String, default="🚀")  # Emoji for hero section
     hero_gradient = Column(String, default="blue,purple,pink")  # Gradient colors (comma-separated)
+    image_url = Column(String, nullable=True)  # Hero image URL (optional)
     related_tickers = Column(String, nullable=True)  # JSON array as string ["AAPL", "MSFT"]
     is_featured = Column(Integer, default=1, index=True)  # 1 = featured as "Article of the Day", 0 = normal
     published = Column(Integer, default=1)  # 1 = published, 0 = draft
@@ -4408,6 +4409,7 @@ async def create_article(
         author=article_data.get("author", "TamtechAI Research"),
         hero_emoji=article_data.get("hero_emoji", "🚀"),
         hero_gradient=article_data.get("hero_gradient", "blue,purple,pink"),
+        image_url=article_data.get("image_url"),
         related_tickers=article_data.get("related_tickers"),  # JSON string
         is_featured=is_featured,
         published=article_data.get("published", 1)
