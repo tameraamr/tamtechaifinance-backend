@@ -186,6 +186,23 @@ class MarketDataCache(Base):
     last_updated = Column(DateTime, default=func.now(), index=True)
     created_at = Column(DateTime, default=func.now())
 
+# 7. Articles - Content management system for TamtechAI articles
+class Article(Base):
+    __tablename__ = "articles"
+    id = Column(Integer, primary_key=True, index=True)
+    slug = Column(String, unique=True, index=True, nullable=False)  # URL-friendly slug
+    title = Column(String, nullable=False)  # Article title
+    description = Column(String, nullable=False)  # Meta description for SEO
+    content = Column(Text, nullable=False)  # Main article content (markdown or HTML)
+    author = Column(String, default="TamtechAI Research")  # Author name
+    hero_emoji = Column(String, default="🚀")  # Emoji for hero section
+    hero_gradient = Column(String, default="blue,purple,pink")  # Gradient colors (comma-separated)
+    related_tickers = Column(String, nullable=True)  # JSON array as string ["AAPL", "MSFT"]
+    is_featured = Column(Integer, default=1, index=True)  # 1 = featured as "Article of the Day", 0 = normal
+    published = Column(Integer, default=1)  # 1 = published, 0 = draft
+    created_at = Column(DateTime, default=func.now(), index=True)
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+
 # إنشاء الجداول تلقائياً
 Base.metadata.create_all(bind=engine)
 
@@ -4337,4 +4354,287 @@ async def get_cache_status(db: Session = Depends(get_db)):
         "stale_7d_plus": stale,
         "coverage": f"{(total_reports / len(TICKER_POOL) * 100):.1f}%",
         "total_tickers_in_pool": len(TICKER_POOL)
+    }
+
+
+# ========================================
+# 📝 ARTICLE MANAGEMENT ENDPOINTS (ADMIN)
+# ========================================
+
+def verify_admin_user(current_user: dict = Depends(get_current_user)):
+    """Verify user is admin (you can add email check)"""
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    # You can add: if current_user["email"] != "your-admin@email.com":
+    #     raise HTTPException(status_code=403, detail="Admin access required")
+    return current_user
+
+
+@app.post("/admin/articles")
+async def create_article(
+    article_data: dict,
+    db: Session = Depends(get_db),
+    admin: dict = Depends(verify_admin_user)
+):
+    """
+    📝 Create new article
+    
+    Auto-features new article as "Article of the Day" by default.
+    Unfeatures all other articles.
+    """
+    
+    # Validate required fields
+    required = ["title", "slug", "description", "content"]
+    for field in required:
+        if field not in article_data:
+            raise HTTPException(status_code=400, detail=f"Missing required field: {field}")
+    
+    # Check if slug already exists
+    existing = db.query(Article).filter(Article.slug == article_data["slug"]).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Article with this slug already exists")
+    
+    # If this article is featured, unfeature all others
+    is_featured = article_data.get("is_featured", 1)
+    if is_featured == 1:
+        db.query(Article).update({"is_featured": 0})
+    
+    # Create article
+    new_article = Article(
+        slug=article_data["slug"],
+        title=article_data["title"],
+        description=article_data["description"],
+        content=article_data["content"],
+        author=article_data.get("author", "TamtechAI Research"),
+        hero_emoji=article_data.get("hero_emoji", "🚀"),
+        hero_gradient=article_data.get("hero_gradient", "blue,purple,pink"),
+        related_tickers=article_data.get("related_tickers"),  # JSON string
+        is_featured=is_featured,
+        published=article_data.get("published", 1)
+    )
+    
+    db.add(new_article)
+    db.commit()
+    db.refresh(new_article)
+    
+    return {
+        "success": True,
+        "article": {
+            "id": new_article.id,
+            "slug": new_article.slug,
+            "title": new_article.title,
+            "is_featured": new_article.is_featured,
+            "created_at": new_article.created_at.isoformat()
+        }
+    }
+
+
+@app.get("/articles")
+async def get_all_articles(
+    published_only: bool = True,
+    db: Session = Depends(get_db)
+):
+    """
+    📰 Get all articles (public endpoint)
+    
+    Returns list of published articles sorted by newest first.
+    """
+    
+    query = db.query(Article)
+    if published_only:
+        query = query.filter(Article.published == 1)
+    
+    articles = query.order_by(Article.created_at.desc()).all()
+    
+    return {
+        "success": True,
+        "count": len(articles),
+        "articles": [
+            {
+                "id": a.id,
+                "slug": a.slug,
+                "title": a.title,
+                "description": a.description,
+                "author": a.author,
+                "hero_emoji": a.hero_emoji,
+                "hero_gradient": a.hero_gradient,
+                "related_tickers": json.loads(a.related_tickers) if a.related_tickers else [],
+                "is_featured": a.is_featured,
+                "created_at": a.created_at.isoformat(),
+                "updated_at": a.updated_at.isoformat()
+            }
+            for a in articles
+        ]
+    }
+
+
+@app.get("/articles/{slug}")
+async def get_article_by_slug(
+    slug: str,
+    db: Session = Depends(get_db)
+):
+    """
+    📄 Get single article by slug (public endpoint)
+    """
+    
+    article = db.query(Article).filter(
+        Article.slug == slug,
+        Article.published == 1
+    ).first()
+    
+    if not article:
+        raise HTTPException(status_code=404, detail="Article not found")
+    
+    return {
+        "success": True,
+        "article": {
+            "id": article.id,
+            "slug": article.slug,
+            "title": article.title,
+            "description": article.description,
+            "content": article.content,
+            "author": article.author,
+            "hero_emoji": article.hero_emoji,
+            "hero_gradient": article.hero_gradient,
+            "related_tickers": json.loads(article.related_tickers) if article.related_tickers else [],
+            "is_featured": article.is_featured,
+            "created_at": article.created_at.isoformat(),
+            "updated_at": article.updated_at.isoformat()
+        }
+    }
+
+
+@app.get("/api/featured-article")
+async def get_featured_article(db: Session = Depends(get_db)):
+    """
+    ⭐ Get the current "Article of the Day"
+    
+    Returns the most recently featured article.
+    If no article is manually featured, returns the newest article.
+    """
+    
+    # Try to get manually featured article
+    featured = db.query(Article).filter(
+        Article.is_featured == 1,
+        Article.published == 1
+    ).order_by(Article.created_at.desc()).first()
+    
+    # If no featured article, get newest article
+    if not featured:
+        featured = db.query(Article).filter(
+            Article.published == 1
+        ).order_by(Article.created_at.desc()).first()
+    
+    if not featured:
+        return {"success": False, "message": "No articles available"}
+    
+    return {
+        "success": True,
+        "article": {
+            "id": featured.id,
+            "slug": featured.slug,
+            "title": featured.title,
+            "description": featured.description,
+            "author": featured.author,
+            "hero_emoji": featured.hero_emoji,
+            "hero_gradient": featured.hero_gradient,
+            "related_tickers": json.loads(featured.related_tickers) if featured.related_tickers else [],
+            "created_at": featured.created_at.isoformat()
+        }
+    }
+
+
+@app.put("/admin/articles/{article_id}")
+async def update_article(
+    article_id: int,
+    article_data: dict,
+    db: Session = Depends(get_db),
+    admin: dict = Depends(verify_admin_user)
+):
+    """
+    ✏️ Update existing article
+    
+    Can update any field including featured status.
+    """
+    
+    article = db.query(Article).filter(Article.id == article_id).first()
+    if not article:
+        raise HTTPException(status_code=404, detail="Article not found")
+    
+    # If setting this as featured, unfeature all others
+    if "is_featured" in article_data and article_data["is_featured"] == 1:
+        db.query(Article).update({"is_featured": 0})
+    
+    # Update fields
+    for key, value in article_data.items():
+        if hasattr(article, key):
+            setattr(article, key, value)
+    
+    article.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(article)
+    
+    return {
+        "success": True,
+        "article": {
+            "id": article.id,
+            "slug": article.slug,
+            "title": article.title,
+            "is_featured": article.is_featured,
+            "updated_at": article.updated_at.isoformat()
+        }
+    }
+
+
+@app.delete("/admin/articles/{article_id}")
+async def delete_article(
+    article_id: int,
+    db: Session = Depends(get_db),
+    admin: dict = Depends(verify_admin_user)
+):
+    """
+    🗑️ Delete article
+    """
+    
+    article = db.query(Article).filter(Article.id == article_id).first()
+    if not article:
+        raise HTTPException(status_code=404, detail="Article not found")
+    
+    db.delete(article)
+    db.commit()
+    
+    return {
+        "success": True,
+        "message": f"Article '{article.title}' deleted successfully"
+    }
+
+
+@app.get("/admin/articles-list")
+async def get_all_articles_admin(
+    db: Session = Depends(get_db),
+    admin: dict = Depends(verify_admin_user)
+):
+    """
+    📋 Get all articles for admin panel (includes drafts)
+    """
+    
+    articles = db.query(Article).order_by(Article.created_at.desc()).all()
+    
+    return {
+        "success": True,
+        "count": len(articles),
+        "articles": [
+            {
+                "id": a.id,
+                "slug": a.slug,
+                "title": a.title,
+                "description": a.description,
+                "author": a.author,
+                "is_featured": a.is_featured,
+                "published": a.published,
+                "created_at": a.created_at.isoformat(),
+                "updated_at": a.updated_at.isoformat()
+            }
+            for a in articles
+        ]
     }
