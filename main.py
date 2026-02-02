@@ -4361,11 +4361,11 @@ async def get_cache_status(db: Session = Depends(get_db)):
 # 📝 ARTICLE MANAGEMENT ENDPOINTS (ADMIN)
 # ========================================
 
-def verify_admin_user(current_user: dict = Depends(get_current_user)):
+async def verify_admin_user(current_user: User = Depends(get_current_user_mandatory)):
     """Verify user is admin (you can add email check)"""
     if not current_user:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    # You can add: if current_user["email"] != "your-admin@email.com":
+    # You can add: if current_user.email != "your-admin@email.com":
     #     raise HTTPException(status_code=403, detail="Admin access required")
     return current_user
 
@@ -4374,7 +4374,7 @@ def verify_admin_user(current_user: dict = Depends(get_current_user)):
 async def create_article(
     article_data: dict,
     db: Session = Depends(get_db),
-    admin: dict = Depends(verify_admin_user)
+    admin: User = Depends(verify_admin_user)
 ):
     """
     📝 Create new article
@@ -4549,7 +4549,7 @@ async def update_article(
     article_id: int,
     article_data: dict,
     db: Session = Depends(get_db),
-    admin: dict = Depends(verify_admin_user)
+    admin: User = Depends(verify_admin_user)
 ):
     """
     ✏️ Update existing article
@@ -4590,7 +4590,7 @@ async def update_article(
 async def delete_article(
     article_id: int,
     db: Session = Depends(get_db),
-    admin: dict = Depends(verify_admin_user)
+    admin: User = Depends(verify_admin_user)
 ):
     """
     🗑️ Delete article
@@ -4612,7 +4612,7 @@ async def delete_article(
 @app.get("/admin/articles-list")
 async def get_all_articles_admin(
     db: Session = Depends(get_db),
-    admin: dict = Depends(verify_admin_user)
+    admin: User = Depends(verify_admin_user)
 ):
     """
     📋 Get all articles for admin panel (includes drafts)
