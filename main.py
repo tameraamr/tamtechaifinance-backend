@@ -16,10 +16,12 @@ import httpx
 from dotenv import load_dotenv
 import feedparser
 from datetime import datetime, timedelta
-from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Float, func, Index
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Float, func, Index, select
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from datetime import timezone, UTC
+import uuid
+from collections import deque, defaultdict
 from jose import JWTError, jwt
 import bcrypt
 import re
@@ -86,8 +88,8 @@ class User(Base):
     is_verified = Column(Integer, default=0, nullable=True)  # 0 = not verified, 1 = verified
     
     # Pro Subscription Fields (Gumroad Integration)
-    is_pro = Column(Integer, default=0, nullable=True)  # 0 = free user, 1 = pro subscriber
-    subscription_expiry = Column(DateTime, nullable=True)  # When pro subscription expires (UTC)
+    is_pro = Column(Integer, default=0, nullable=True, index=True)  # 0 = free user, 1 = pro subscriber
+    subscription_expiry = Column(DateTime, nullable=True, index=True)  # When pro subscription expires (UTC)
     gumroad_license_key = Column(String, nullable=True)  # Store license key for verification 
 
 # هذا الجدول يسجل IP الزائر وكم مرة استخدم الموقع
@@ -142,6 +144,10 @@ class UserAnalysisHistory(Base):
     confidence_score = Column(Integer)
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    
+    __table_args__ = (
+        Index('idx_user_analysis_history_user_created', 'user_id', 'created_at'),
+    )
 
 # 5. Portfolio Holdings - Track user stock portfolios
 class PortfolioHolding(Base):
@@ -260,6 +266,72 @@ except Exception as e:
     print("   Server will start without Gemini AI functionality.")
     client = None
     model_name = None
+
+# --- Circuit Breaker for Gemini API ---
+class CircuitBreaker:
+    """Circuit breaker pattern for Gemini API to prevent cascading failures"""
+    def __init__(self, failure_threshold=5, timeout_duration=60):
+        self.failure_threshold = failure_threshold
+        self.timeout_duration = timeout_duration  # seconds
+        self.failures = deque(maxlen=failure_threshold)
+        self.last_failure_time = None
+        self.state = "CLOSED"  # CLOSED, OPEN, HALF_OPEN
+    
+    def record_failure(self):
+        """Record a failure and update circuit state"""
+        current_time = datetime.now(timezone.utc)
+        self.failures.append(current_time)
+        self.last_failure_time = current_time
+        
+        # Check if we should open the circuit
+        if len(self.failures) >= self.failure_threshold:
+            # Check if all failures occurred within the last 60 seconds
+            oldest_failure = self.failures[0]
+            if (current_time - oldest_failure).total_seconds() <= self.timeout_duration:
+                self.state = "OPEN"
+                print(f"🔴 CIRCUIT BREAKER OPENED: {len(self.failures)} failures in {self.timeout_duration}s")
+    
+    def record_success(self):
+        """Record a success and potentially close the circuit"""
+        self.failures.clear()
+        if self.state == "HALF_OPEN":
+            self.state = "CLOSED"
+            print("✅ CIRCUIT BREAKER CLOSED: Service recovered")
+    
+    def can_proceed(self) -> bool:
+        """Check if requests should be allowed through"""
+        if self.state == "CLOSED":
+            return True
+        
+        if self.state == "OPEN":
+            # Check if timeout has passed
+            if self.last_failure_time:
+                time_since_last_failure = (datetime.now(timezone.utc) - self.last_failure_time).total_seconds()
+                if time_since_last_failure >= self.timeout_duration:
+                    self.state = "HALF_OPEN"
+                    print("⚠️ CIRCUIT BREAKER HALF-OPEN: Testing service")
+                    return True
+            return False
+        
+        # HALF_OPEN state
+        return True
+
+# Global circuit breaker instance
+gemini_circuit_breaker = CircuitBreaker(failure_threshold=5, timeout_duration=60)
+
+# --- Task Queue System ---
+class TaskStatus(BaseModel):
+    task_id: str
+    status: str  # "pending", "processing", "completed", "failed"
+    ticker: str
+    result: Optional[dict] = None
+    error: Optional[str] = None
+    position_in_queue: Optional[int] = None
+    estimated_wait_time: Optional[int] = None  # seconds
+
+# In-memory task storage (for simple implementation without Redis)
+task_storage = {}
+task_queue = asyncio.Queue()
 
 # --- Global Market Data Caching Engine ---
 
@@ -1451,8 +1523,8 @@ async def get_historical_analysis(
         # Parse the JSON data
         analysis_json = json.loads(cached_report.ai_json_data)
         
-        # Get live financial data for chart and current price
-        live_financial_data = await get_real_financial_data(ticker)
+        # Get live financial data for chart and current price (with caching)
+        live_financial_data = await get_real_financial_data(ticker, db=db, use_cache=True)
         
         if not live_financial_data or not live_financial_data.get('price'):
             raise HTTPException(status_code=500, detail="Failed to fetch current market data")
@@ -1529,10 +1601,10 @@ def get_random_ticker_v2():
         }
 
 @app.get("/get-price/{ticker}")
-async def get_stock_price(ticker: str):
+async def get_stock_price(ticker: str, db: Session = Depends(get_db)):
     """Get current stock price for Regret Machine"""
     try:
-        data = await get_real_financial_data(ticker)
+        data = await get_real_financial_data(ticker, db=db, use_cache=True)
         if data and 'price' in data:
             return {"price": data['price']}
         else:
@@ -1547,9 +1619,51 @@ def suggest_stock():
     """OLD ENDPOINT - Redirects to V2 for backward compatibility"""
     return get_random_ticker_v2()
 
-async def get_real_financial_data(ticker: str):
-    """Fetch stock data with automatic retry on network failures"""
+async def get_real_financial_data(ticker: str, db: Session = None, use_cache: bool = True):
+    """Fetch stock data with automatic retry on network failures and 10-minute caching"""
     import asyncio
+    
+    # 🚀 PERFORMANCE OPTIMIZATION: Check cache first (10-minute TTL)
+    if use_cache and db:
+        ten_minutes_ago = datetime.now(timezone.utc) - timedelta(minutes=10)
+        cached_data = db.query(MarketDataCache).filter(
+            MarketDataCache.ticker == ticker.upper(),
+            MarketDataCache.last_updated > ten_minutes_ago
+        ).first()
+        
+        if cached_data:
+            print(f"✅ Using cached yfinance data for {ticker} (age: {(datetime.now(timezone.utc) - make_datetime_aware(cached_data.last_updated)).seconds}s)")
+            # Return in the same format as fresh data
+            return {
+                "symbol": cached_data.ticker,
+                "companyName": cached_data.name,
+                "price": cached_data.price,
+                "currency": "USD",
+                "market_cap": cached_data.market_cap or "N/A",
+                "fiftyTwoWeekHigh": cached_data.price * 1.2,  # Approximation
+                "fiftyTwoWeekLow": cached_data.price * 0.8,   # Approximation
+                "targetMeanPrice": "N/A",
+                "recommendationKey": "none",
+                "pe_ratio": 0,
+                "forward_pe": 0,
+                "peg_ratio": 0,
+                "price_to_sales": 0,
+                "price_to_book": 0,
+                "eps": 0,
+                "beta": 0,
+                "dividend_yield": 0,
+                "profit_margins": 0,
+                "operating_margins": 0,
+                "return_on_equity": 0,
+                "debt_to_equity": 0,
+                "revenue_growth": 0,
+                "current_ratio": 0,
+                "chart_data": [],
+                "news": [],
+                "from_cache": True  # Flag to indicate cached data
+            }
+    
+    # Fetch fresh data from yfinance
     max_retries = 3
     retry_delay = 1  # Start with 1 second
     
@@ -1574,9 +1688,43 @@ async def get_real_financial_data(ticker: str):
             history = await asyncio.to_thread(lambda: stock.history(period="6mo"))
             chart_data = [{"date": d.strftime('%Y-%m-%d'), "price": round(r['Close'], 2)} for d, r in history.iterrows()]
             
-            # Success! Return data
+            # Success! Update cache if db provided
             if attempt > 0:
                 print(f"✅ Price fetch succeeded on retry {attempt + 1}")
+            
+            if db and use_cache:
+                # Update or create cache entry
+                cache_entry = db.query(MarketDataCache).filter(
+                    MarketDataCache.ticker == ticker.upper()
+                ).first()
+                
+                if cache_entry:
+                    cache_entry.price = current_price
+                    cache_entry.name = info.get('longName', ticker)
+                    cache_entry.market_cap = info.get('marketCap')
+                    cache_entry.sector = info.get('sector')
+                    cache_entry.volume = info.get('volume')
+                    cache_entry.last_updated = datetime.now(timezone.utc)
+                else:
+                    cache_entry = MarketDataCache(
+                        ticker=ticker.upper(),
+                        asset_type='stock',
+                        name=info.get('longName', ticker),
+                        price=current_price,
+                        change_percent=0,  # Calculate if needed
+                        sector=info.get('sector'),
+                        market_cap=info.get('marketCap'),
+                        volume=info.get('volume'),
+                        last_updated=datetime.now(timezone.utc)
+                    )
+                    db.add(cache_entry)
+                
+                try:
+                    db.commit()
+                    print(f"✅ Updated yfinance cache for {ticker}")
+                except Exception as cache_err:
+                    print(f"⚠️ Cache update failed: {cache_err}")
+                    db.rollback()
             
             return {
                 "symbol": ticker.upper(),
@@ -1698,14 +1846,18 @@ async def analyze_stock(
                 print(f"✅ PRO USER: {current_user.email} - Unlimited access (no credit deduction)")
                 credits_left = current_user.credits  # Return current credits but don't deduct
             else:
-                # Free user - apply credit check
-                if current_user.credits <= 0:
+                # Free user - apply credit check with row-level locking
+                # 🔒 CRITICAL FIX: Use SELECT FOR UPDATE to prevent race conditions
+                stmt = select(User).where(User.id == current_user.id).with_for_update()
+                locked_user = db.execute(stmt).scalar_one()
+                
+                if locked_user.credits <= 0:
                     raise HTTPException(status_code=402, detail="No credits left")
                 
-                # 💳 IMMEDIATE DEDUCTION - Before any processing
-                current_user.credits -= 1
+                # 💳 IMMEDIATE DEDUCTION - Now protected by lock
+                locked_user.credits -= 1
                 db.commit()
-                credits_left = current_user.credits
+                credits_left = locked_user.credits
                 
                 print(f"✅ User {current_user.email} charged 1 credit. Remaining: {credits_left}")
         else:
@@ -1764,8 +1916,8 @@ async def analyze_stock(
         if not cache_hit:
             print(f"🔬 Generating NEW AI report for {ticker}")
             
-            # Get financial data (without price for AI prompt)
-            financial_data_for_ai = await get_real_financial_data(ticker)
+            # Get financial data with caching enabled (10-minute cache)
+            financial_data_for_ai = await get_real_financial_data(ticker, db=db, use_cache=True)
             
             if not financial_data_for_ai or not financial_data_for_ai.get('price'):
                 raise HTTPException(status_code=404, detail=f"Stock '{ticker}' not found or delisted.")
@@ -1876,6 +2028,24 @@ async def analyze_stock(
                     print("❌ DEBUG: Client or model_name is None")
                     raise HTTPException(status_code=500, detail="AI service not configured")
                 
+                # 🔒 CIRCUIT BREAKER CHECK
+                if not gemini_circuit_breaker.can_proceed():
+                    print("⚠️ CIRCUIT BREAKER OPEN: Using cached response")
+                    # Try to find any cached report for this ticker (any language as fallback)
+                    fallback_report = db.query(AnalysisReport).filter(
+                        AnalysisReport.ticker == ticker
+                    ).order_by(AnalysisReport.updated_at.desc()).first()
+                    
+                    if fallback_report:
+                        analysis_json = json.loads(fallback_report.ai_json_data)
+                        analysis_json["warning"] = "Using cached data due to high service load"
+                        cache_hit = True
+                    else:
+                        raise HTTPException(
+                            status_code=503, 
+                            detail="AI service temporarily unavailable. Please try again in a minute."
+                        )
+                
                 # Add timeout protection (30 seconds max)
                 import asyncio
                 try:
@@ -1890,7 +2060,12 @@ async def analyze_stock(
                             )
                         )
                     )
+                    # Record success
+                    gemini_circuit_breaker.record_success()
                 except Exception as model_err:
+                    # Record failure for circuit breaker
+                    gemini_circuit_breaker.record_failure()
+                    
                     if "404" in str(model_err) or "not found" in str(model_err).lower() or "model" in str(model_err).lower():
                         print(f"⚠️ Gemini 2.0 Flash not available, falling back to 1.5 Flash: {model_err}")
                         try:
@@ -1904,12 +2079,14 @@ async def analyze_stock(
                                     )
                                 )
                             )
+                            # Record success if fallback works
+                            gemini_circuit_breaker.record_success()
                         except Exception as fallback_err:
                             print(f"❌ Fallback also failed: {fallback_err}")
+                            gemini_circuit_breaker.record_failure()
                             raise fallback_err
                     else:
                         raise model_err
-                    raise
                 
                 # Parse JSON with repair attempts for malformed responses
                 raw_response_text = response.text
@@ -2034,7 +2211,7 @@ async def analyze_stock(
         
         # ========== STEP 4: LIVE PRICE INJECTION ==========
         print(f"💹 Fetching LIVE price for {ticker}")
-        live_financial_data = await get_real_financial_data(ticker)
+        live_financial_data = await get_real_financial_data(ticker, db=db, use_cache=True)
         use_cached_price = False
         
         if not live_financial_data or not live_financial_data.get('price'):
@@ -2409,9 +2586,9 @@ async def analyze_compare(
     # --- 🛡️ نهاية نظام الحماية ---
 
     try:
-        # 2. جلب بيانات السهمين
-        data1 = await get_real_financial_data(ticker1)
-        data2 = await get_real_financial_data(ticker2)
+        # 2. جلب بيانات السهمين (with 10-minute caching)
+        data1 = await get_real_financial_data(ticker1, db=db, use_cache=True)
+        data2 = await get_real_financial_data(ticker2, db=db, use_cache=True)
         
         if not data1 or not data2:
             raise HTTPException(status_code=404, detail="One or both stocks not found")
@@ -2531,9 +2708,9 @@ async def analyze_compare(
         print(f"Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     try:
-        # 2. جلب بيانات السهمين
-        data1 = await get_real_financial_data(ticker1)
-        data2 = await get_real_financial_data(ticker2)
+        # 2. جلب بيانات السهمين (with 10-minute caching)
+        data1 = await get_real_financial_data(ticker1, db=db, use_cache=True)
+        data2 = await get_real_financial_data(ticker2, db=db, use_cache=True)
         
         if not data1 or not data2:
             raise HTTPException(status_code=404, detail="One or both stocks not found")
