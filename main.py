@@ -2313,15 +2313,15 @@ async def analyze_stock(
 @app.get("/recent-analyses")
 async def get_recent_analyses(db: Session = Depends(get_db)):
     """
-    Get most recent cached stock analyses from AnalysisReport table.
-    Shows latest updates across all 270 tickers, ordered by freshness.
+    Get most recent user analysis searches from UserAnalysisHistory.
+    Shows the latest 10 stocks analyzed by any user, ordered by recency.
+    This reflects actual user activity, not cache refresh times.
     """
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timezone
     
-    # Get the 10 most recently updated reports (fresh cache)
-    recent_reports = db.query(AnalysisReport)\
-        .filter(AnalysisReport.language == "en")\
-        .order_by(AnalysisReport.updated_at.desc())\
+    # Get the 10 most recent user analyses (actual searches)
+    recent_searches = db.query(UserAnalysisHistory)\
+        .order_by(UserAnalysisHistory.created_at.desc())\
         .limit(10)\
         .all()
     
@@ -2329,13 +2329,13 @@ async def get_recent_analyses(db: Session = Depends(get_db)):
     
     return [
         {
-            "ticker": r.ticker,
-            "verdict": r.verdict,
-            "confidence": r.confidence_score,
-            "time": r.updated_at.strftime("%b %d") if r.updated_at else "Unknown",
-            "is_fresh": (now - r.updated_at).days < 7 if r.updated_at else False,
-            "age_days": (now - r.updated_at).days if r.updated_at else 999
-        } for r in recent_reports
+            "ticker": h.ticker,
+            "verdict": h.verdict,
+            "confidence": h.confidence_score,
+            "time": h.created_at.strftime("%H:%M") if h.created_at else "Unknown",
+            "is_fresh": (now - h.created_at).total_seconds() < 300 if h.created_at else False,  # Fresh if < 5 min
+            "age_minutes": int((now - h.created_at).total_seconds() / 60) if h.created_at else 999
+        } for h in recent_searches
     ]
     
 
