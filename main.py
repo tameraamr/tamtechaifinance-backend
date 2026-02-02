@@ -2319,24 +2319,40 @@ async def get_recent_analyses(db: Session = Depends(get_db)):
     """
     from datetime import datetime, timezone
     
-    # Get the 10 most recent user analyses (actual searches)
-    recent_searches = db.query(UserAnalysisHistory)\
-        .order_by(UserAnalysisHistory.created_at.desc())\
-        .limit(10)\
-        .all()
-    
-    now = datetime.now(timezone.utc)
-    
-    return [
-        {
-            "ticker": h.ticker,
-            "verdict": h.verdict,
-            "confidence": h.confidence_score,
-            "time": h.created_at.strftime("%H:%M") if h.created_at else "Unknown",
-            "is_fresh": (now - h.created_at).total_seconds() < 300 if h.created_at else False,  # Fresh if < 5 min
-            "age_minutes": int((now - h.created_at).total_seconds() / 60) if h.created_at else 999
-        } for h in recent_searches
-    ]
+    try:
+        # Get the 10 most recent user analyses (actual searches)
+        recent_searches = db.query(UserAnalysisHistory)\
+            .order_by(UserAnalysisHistory.created_at.desc())\
+            .limit(10)\
+            .all()
+        
+        if not recent_searches:
+            return []
+        
+        now = datetime.now(timezone.utc)
+        
+        results = []
+        for h in recent_searches:
+            # Make created_at timezone-aware if it isn't
+            created_at = h.created_at
+            if created_at and created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=timezone.utc)
+            
+            if created_at:
+                age_seconds = (now - created_at).total_seconds()
+                results.append({
+                    "ticker": h.ticker,
+                    "verdict": h.verdict or "HOLD",
+                    "confidence": h.confidence_score or 50,
+                    "time": created_at.strftime("%H:%M"),
+                    "is_fresh": age_seconds < 300,  # Fresh if < 5 min
+                    "age_minutes": int(age_seconds / 60)
+                })
+        
+        return results
+    except Exception as e:
+        print(f"Error in recent-analyses: {e}")
+        return []
     
 
 @app.post("/verify-license")
