@@ -236,6 +236,17 @@ try:
     else:
         print("✅ is_pro column already exists")
     
+    # Check if articles table has image_url column
+    articles_columns = [col['name'] for col in inspector.get_columns('articles')]
+    if 'image_url' not in articles_columns:
+        print("⚙️ Running migration: Adding image_url column to articles table...")
+        with engine.connect() as conn:
+            conn.execute(text("ALTER TABLE articles ADD COLUMN image_url TEXT"))
+            conn.commit()
+        print("✅ Migration complete: image_url column added")
+    else:
+        print("✅ image_url column already exists")
+    
     # Add subscription_expiry column if it doesn't exist
     if 'subscription_expiry' not in users_columns:
         print("⚙️ Running migration: Adding subscription_expiry column to users table...")
