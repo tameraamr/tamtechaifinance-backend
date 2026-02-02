@@ -4471,8 +4471,10 @@ async def get_all_articles(
                 "author": a.author,
                 "hero_emoji": a.hero_emoji,
                 "hero_gradient": a.hero_gradient,
-                "related_tickers": json.loads(a.related_tickers) if a.related_tickers else [],
+                "image_url": a.image_url,
+                "related_tickers": a.related_tickers,
                 "is_featured": a.is_featured,
+                "published": a.published,
                 "created_at": a.created_at.isoformat(),
                 "updated_at": a.updated_at.isoformat()
             }
@@ -4551,7 +4553,8 @@ async def get_featured_article(db: Session = Depends(get_db)):
             "author": featured.author,
             "hero_emoji": featured.hero_emoji,
             "hero_gradient": featured.hero_gradient,
-            "related_tickers": json.loads(featured.related_tickers) if featured.related_tickers else [],
+            "image_url": featured.image_url,
+            "related_tickers": featured.related_tickers.split(',') if featured.related_tickers else [],
             "created_at": featured.created_at.isoformat()
         }
     }
