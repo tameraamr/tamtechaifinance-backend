@@ -4511,7 +4511,8 @@ async def get_article_by_slug(
             "author": article.author,
             "hero_emoji": article.hero_emoji,
             "hero_gradient": article.hero_gradient,
-            "related_tickers": json.loads(article.related_tickers) if article.related_tickers else [],
+            "image_url": article.image_url,
+            "related_tickers": article.related_tickers.split(',') if article.related_tickers else [],
             "is_featured": article.is_featured,
             "created_at": article.created_at.isoformat(),
             "updated_at": article.updated_at.isoformat()
