@@ -1895,18 +1895,22 @@ async def analyze_stock(
         ).first()
         
         if cached_report and not force_refresh:
-            # Check if cache is still valid (within 24 hours)
+            # Check if cache is still valid (within 7 days for fresh data)
             cache_age = datetime.now(timezone.utc) - make_datetime_aware(cached_report.updated_at)
-            if cache_age < timedelta(hours=24):
+            if cache_age < timedelta(days=7):
                 cache_hit = True
                 analysis_json = json.loads(cached_report.ai_json_data)
                 cache_age_hours = cache_age.total_seconds() / 3600
-                print(f"📦 CACHE HIT for {ticker} (Language: {lang}). Age: {cache_age_hours:.1f} hours")
+                cache_age_days = cache_age.days
+                print(f"📦 CACHE HIT for {ticker} (Language: {lang}). Age: {cache_age_days} days, {cache_age_hours:.1f} hours")
             else:
-                print(f"🗑️ Cache expired for {ticker} ({lang}). Deleting old report.")
-                db.delete(cached_report)
-                db.commit()
-                cached_report = None
+                # 🔄 Don't delete old cache - keep it for SEO, but regenerate for users
+                cache_age_days = cache_age.days
+                print(f"⚠️ Cache stale for {ticker} ({lang}) - {cache_age_days} days old. Keeping for SEO, will regenerate.")
+                # Keep the old report in database (don't delete)
+                # Just mark as stale and force regeneration
+                cache_hit = False
+                cached_report = None  # This forces regeneration below
         elif force_refresh:
             print(f"⚡ FORCE REFRESH for {ticker} ({lang}). Skipping cache.")
         elif not cached_report:
@@ -2308,16 +2312,30 @@ async def analyze_stock(
 
 @app.get("/recent-analyses")
 async def get_recent_analyses(db: Session = Depends(get_db)):
-    # جلب آخر 5 تحليلات مرتبة من الأحدث للأقدم
-    history = db.query(AnalysisHistory).order_by(AnalysisHistory.created_at.desc()).limit(5).all()
+    """
+    Get most recent cached stock analyses from AnalysisReport table.
+    Shows latest updates across all 270 tickers, ordered by freshness.
+    """
+    from datetime import datetime, timedelta, timezone
+    
+    # Get the 10 most recently updated reports (fresh cache)
+    recent_reports = db.query(AnalysisReport)\
+        .filter(AnalysisReport.language == "en")\
+        .order_by(AnalysisReport.updated_at.desc())\
+        .limit(10)\
+        .all()
+    
+    now = datetime.now(timezone.utc)
     
     return [
         {
-            "ticker": h.ticker,
-            "verdict": h.verdict,
-            "confidence": h.confidence_score,
-            "time": h.created_at.strftime("%H:%M") 
-        } for h in history
+            "ticker": r.ticker,
+            "verdict": r.verdict,
+            "confidence": r.confidence_score,
+            "time": r.updated_at.strftime("%b %d") if r.updated_at else "Unknown",
+            "is_fresh": (now - r.updated_at).days < 7 if r.updated_at else False,
+            "age_days": (now - r.updated_at).days if r.updated_at else 999
+        } for r in recent_reports
     ]
     
 
@@ -4117,3 +4135,190 @@ async def get_stock_chart(ticker: str, range: str = "1d", interval: str = "1d"):
     except Exception as e:
         print(f"Chart fetch error for {ticker}: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch chart data")
+
+# ==================== ADMIN/MAINTENANCE ENDPOINTS ====================
+
+@app.post("/admin/refresh-all-tickers")
+async def refresh_all_tickers(
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    admin_key: str = None
+):
+    """
+    🔄 ADMIN ENDPOINT: Refresh all 270 tickers in the pool
+    
+    Use this weekly to keep all stock analyses fresh.
+    Runs in background to avoid timeout.
+    
+    Cost: 270 tickers × $0.002 = $0.54 per run
+    Recommended: Run once per week
+    
+    Usage:
+    POST /admin/refresh-all-tickers?admin_key=YOUR_SECRET_KEY
+    
+    Returns immediately with task started confirmation.
+    Check logs to see progress.
+    """
+    
+    # Simple admin key check (you can change this secret)
+    ADMIN_SECRET = os.getenv("ADMIN_REFRESH_KEY", "tamtech_refresh_2026")
+    
+    if admin_key != ADMIN_SECRET:
+        raise HTTPException(
+            status_code=403,
+            detail="Invalid admin key. Set ?admin_key=YOUR_SECRET_KEY"
+        )
+    
+    # Count how many need refresh (older than 7 days)
+    seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
+    stale_count = db.query(AnalysisReport).filter(
+        AnalysisReport.updated_at < seven_days_ago
+    ).count()
+    
+    total_tickers = len(TICKER_POOL)
+    
+    async def refresh_ticker_batch(ticker_list, db_session):
+        """Background task to refresh all tickers"""
+        refreshed = 0
+        failed = 0
+        skipped = 0
+        
+        for ticker in ticker_list:
+            try:
+                print(f"🔄 Refreshing {ticker}... ({refreshed + failed + skipped + 1}/{len(ticker_list)})")
+                
+                # Check if already fresh (less than 7 days old)
+                cached = db_session.query(AnalysisReport).filter(
+                    AnalysisReport.ticker == ticker,
+                    AnalysisReport.language == "en"
+                ).order_by(AnalysisReport.updated_at.desc()).first()
+                
+                if cached:
+                    cache_age = datetime.now(timezone.utc) - make_datetime_aware(cached.updated_at)
+                    if cache_age < timedelta(days=7):
+                        print(f"  ✓ {ticker} already fresh ({cache_age.days} days old)")
+                        skipped += 1
+                        continue
+                
+                # Get financial data
+                financial_data = await get_real_financial_data(ticker, db=db_session, use_cache=False)
+                if not financial_data or not financial_data.get('price'):
+                    print(f"  ✗ {ticker} - No data available")
+                    failed += 1
+                    continue
+                
+                # Check circuit breaker
+                if not gemini_circuit_breaker.can_proceed():
+                    print(f"  ⚠️ Circuit breaker open, stopping batch refresh")
+                    break
+                
+                # Generate AI analysis
+                if not client:
+                    temp_client = genai.Client(api_key=API_KEY)
+                else:
+                    temp_client = client
+                
+                ai_payload = {k: v for k, v in financial_data.items() if k != 'chart_data'}
+                
+                # Simplified prompt for batch refresh
+                prompt = f"""Analyze {ticker} stock for long-term investors. Return JSON with:
+{{"summary_one_line": "One clear sentence about the company and outlook",
+"verdict": "BUY/SELL/HOLD",
+"confidence_score": 0-100,
+"intrinsic_value": estimated_fair_value_number,
+"chapter_1_the_business": "Business model and competitive position (3-4 sentences)",
+"chapter_2_financials": "Financial health analysis (3-4 sentences)",
+"chapter_3_valuation": "Valuation and price assessment (3-4 sentences)",
+"chapter_4_risks_and_catalysts": "Key risks and opportunities (3-4 sentences)"}}
+
+Financial Data: {json.dumps(ai_payload, default=str)}"""
+                
+                response = await asyncio.to_thread(
+                    lambda: temp_client.models.generate_content(
+                        model='gemini-2.0-flash',
+                        contents=prompt,
+                        config=types.GenerateContentConfig(
+                            response_mime_type="application/json",
+                            temperature=0.3
+                        )
+                    )
+                )
+                
+                gemini_circuit_breaker.record_success()
+                analysis_json = json.loads(response.text)
+                
+                # Update or create report
+                if cached:
+                    cached.ai_json_data = json.dumps(analysis_json)
+                    cached.updated_at = datetime.now(timezone.utc)
+                else:
+                    new_report = AnalysisReport(
+                        ticker=ticker,
+                        language="en",
+                        ai_json_data=json.dumps(analysis_json),
+                        created_at=datetime.now(timezone.utc),
+                        updated_at=datetime.now(timezone.utc)
+                    )
+                    db_session.add(new_report)
+                
+                db_session.commit()
+                refreshed += 1
+                print(f"  ✅ {ticker} refreshed successfully")
+                
+                # Small delay to avoid rate limits (15 RPM = 1 per 4 seconds)
+                await asyncio.sleep(4)
+                
+            except Exception as e:
+                gemini_circuit_breaker.record_failure()
+                print(f"  ✗ {ticker} failed: {e}")
+                failed += 1
+                db_session.rollback()
+                continue
+        
+        print(f"\n🎉 BATCH REFRESH COMPLETE:")
+        print(f"  ✅ Refreshed: {refreshed}")
+        print(f"  ⏭️  Skipped (already fresh): {skipped}")
+        print(f"  ✗ Failed: {failed}")
+        print(f"  📊 Total: {len(ticker_list)}")
+    
+    # Start background task
+    background_tasks.add_task(refresh_ticker_batch, TICKER_POOL, db)
+    
+    return {
+        "success": True,
+        "message": "Refresh started in background",
+        "total_tickers": total_tickers,
+        "stale_reports": stale_count,
+        "estimated_time": f"{total_tickers * 4 / 60:.0f} minutes",
+        "estimated_cost": f"${total_tickers * 0.002:.2f}",
+        "status": "Check server logs for progress"
+    }
+
+
+@app.get("/admin/cache-status")
+async def get_cache_status(db: Session = Depends(get_db)):
+    """
+    📊 Check cache freshness status
+    Shows how many reports are fresh vs stale
+    """
+    
+    seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
+    one_day_ago = datetime.now(timezone.utc) - timedelta(days=1)
+    
+    total_reports = db.query(AnalysisReport).count()
+    fresh_24h = db.query(AnalysisReport).filter(
+        AnalysisReport.updated_at > one_day_ago
+    ).count()
+    fresh_7d = db.query(AnalysisReport).filter(
+        AnalysisReport.updated_at > seven_days_ago
+    ).count()
+    stale = total_reports - fresh_7d
+    
+    return {
+        "total_reports": total_reports,
+        "fresh_24h": fresh_24h,
+        "fresh_7d": fresh_7d,
+        "stale_7d_plus": stale,
+        "coverage": f"{(total_reports / len(TICKER_POOL) * 100):.1f}%",
+        "total_tickers_in_pool": len(TICKER_POOL)
+    }
