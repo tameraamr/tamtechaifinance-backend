@@ -4370,6 +4370,48 @@ async def get_cache_status(db: Session = Depends(get_db)):
 
 
 # ========================================
+# 🐛 DEBUG ENDPOINT - Check database state
+# ========================================
+@app.get("/debug/articles")
+async def debug_articles(db: Session = Depends(get_db)):
+    """Debug endpoint to check articles table"""
+    try:
+        from sqlalchemy import inspect
+        inspector = inspect(engine)
+        
+        # Check if articles table exists
+        tables = inspector.get_table_names()
+        if 'articles' not in tables:
+            return {"error": "articles table does not exist", "tables": tables}
+        
+        # Get column info
+        columns = inspector.get_columns('articles')
+        column_names = [col['name'] for col in columns]
+        
+        # Get all articles
+        articles = db.query(Article).all()
+        
+        return {
+            "table_exists": True,
+            "columns": column_names,
+            "has_image_url": 'image_url' in column_names,
+            "article_count": len(articles),
+            "articles": [
+                {
+                    "id": a.id,
+                    "title": a.title,
+                    "slug": a.slug,
+                    "has_image": bool(getattr(a, 'image_url', None))
+                }
+                for a in articles
+            ]
+        }
+    except Exception as e:
+        return {"error": str(e), "type": str(type(e))}
+
+
+
+# ========================================
 # 📝 ARTICLE MANAGEMENT ENDPOINTS (ADMIN)
 # ========================================
 
