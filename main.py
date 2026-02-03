@@ -4408,8 +4408,8 @@ async def refresh_all_tickers(
                         skipped += 1
                         continue
                 
-                # Get financial data
-                financial_data = await get_real_financial_data(ticker, db=db_session, use_cache=False)
+                # Get financial data (enable cache for speed)
+                financial_data = await get_real_financial_data(ticker, db=db_session, use_cache=True)
                 if not financial_data or not financial_data.get('price'):
                     print(f"  ✗ {ticker} - No data available")
                     failed += 1
@@ -4473,8 +4473,9 @@ Financial Data: {json.dumps(ai_payload, default=str)}"""
                 refreshed += 1
                 print(f"  ✅ {ticker} refreshed successfully")
                 
-                # Small delay to avoid rate limits (15 RPM = 1 per 4 seconds)
-                await asyncio.sleep(4)
+                # Small delay to avoid rate limits
+                # Free tier: ~15 RPM, so wait 5 seconds between calls
+                await asyncio.sleep(5)
                 
             except Exception as e:
                 gemini_circuit_breaker.record_failure()
