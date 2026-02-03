@@ -4351,7 +4351,8 @@ async def get_stock_chart(ticker: str, range: str = "1d", interval: str = "1d"):
 async def refresh_all_tickers(
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-    admin_key: str = None
+    admin_key: str = None,
+    force: bool = False  # NEW: Force refresh even if cache is fresh
 ):
     """
     🔄 ADMIN ENDPOINT: Refresh all 270 tickers in the pool
@@ -4364,6 +4365,7 @@ async def refresh_all_tickers(
     
     Usage:
     POST /admin/refresh-all-tickers?admin_key=YOUR_SECRET_KEY
+    POST /admin/refresh-all-tickers?admin_key=YOUR_SECRET_KEY&force=true (force refresh all)
     
     Returns immediately with task started confirmation.
     Check logs to see progress.
@@ -4386,7 +4388,7 @@ async def refresh_all_tickers(
     
     total_tickers = len(TICKER_POOL)
     
-    async def refresh_ticker_batch(ticker_list, db_session):
+    async def refresh_ticker_batch(ticker_list, db_session, force_refresh):
         """Background task to refresh all tickers"""
         refreshed = 0
         failed = 0
@@ -4396,13 +4398,13 @@ async def refresh_all_tickers(
             try:
                 print(f"🔄 Refreshing {ticker}... ({refreshed + failed + skipped + 1}/{len(ticker_list)})")
                 
-                # Check if already fresh (less than 7 days old)
+                # Check if already fresh (less than 7 days old) - unless force=true
                 cached = db_session.query(AnalysisReport).filter(
                     AnalysisReport.ticker == ticker,
                     AnalysisReport.language == "en"
                 ).order_by(AnalysisReport.updated_at.desc()).first()
                 
-                if cached:
+                if cached and not force_refresh:
                     cache_age = datetime.now(timezone.utc) - make_datetime_aware(cached.updated_at)
                     if cache_age < timedelta(days=7):
                         print(f"  ✓ {ticker} already fresh ({cache_age.days} days old)")
@@ -4491,15 +4493,15 @@ Financial Data: {json.dumps(ai_payload, default=str)}"""
         print(f"  ✗ Failed: {failed}")
         print(f"  📊 Total: {len(ticker_list)}")
     
-    # Start background task
-    background_tasks.add_task(refresh_ticker_batch, TICKER_POOL, db)
+    # Start background task with force parameter
+    background_tasks.add_task(refresh_ticker_batch, TICKER_POOL, db, force)
     
     return {
         "success": True,
-        "message": "Refresh started in background",
+        "message": f"Refresh started in background ({'FORCE MODE - all tickers' if force else 'only stale tickers'})",
         "total_tickers": total_tickers,
-        "stale_reports": stale_count,
-        "estimated_time": f"{total_tickers * 4 / 60:.0f} minutes",
+        "stale_reports": stale_count if not force else total_tickers,
+        "estimated_time": f"{total_tickers * 5 / 60:.0f} minutes" if force else f"{stale_count * 5 / 60:.0f} minutes",
         "estimated_cost": f"${total_tickers * 0.002:.2f}",
         "status": "Check server logs for progress"
     }
