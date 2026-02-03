@@ -345,8 +345,8 @@ class CircuitBreaker:
         # HALF_OPEN state
         return True
 
-# Global circuit breaker instance
-gemini_circuit_breaker = CircuitBreaker(failure_threshold=5, timeout_duration=60)
+# Global circuit breaker instance (increased threshold for production)
+gemini_circuit_breaker = CircuitBreaker(failure_threshold=20, timeout_duration=120)
 
 # --- Task Queue System ---
 class TaskStatus(BaseModel):
@@ -2230,17 +2230,38 @@ async def analyze_stock(
                 
                 # User-friendly error messages
                 if "404" in error_msg or "NOT_FOUND" in error_msg:
-                    user_message = "AI service is updating. Your credit has been refunded."
+                    user_message = "AI service is updating."
                 elif "403" in error_msg or "PERMISSION_DENIED" in error_msg:
-                    user_message = "AI service temporarily unavailable. Your credit has been refunded."
+                    user_message = "AI service temporarily unavailable."
                 elif "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg:
-                    user_message = "High traffic detected. Your credit has been refunded. Please try again."
+                    user_message = "High traffic detected. Using cached data if available."
                 elif "API key" in error_msg:
-                    user_message = "Service configuration error. Your credit has been refunded. Contact support."
+                    user_message = "Service configuration error."
                 else:
-                    user_message = "Analysis temporarily unavailable. Your credit has been refunded."
+                    user_message = "Analysis temporarily unavailable."
                 
-                raise HTTPException(status_code=500, detail=user_message)
+                # Instead of failing completely, try to return cached data
+                print(f"⚠️ AI Error: {user_message}")
+                print(f"🔍 Checking if we have ANY cached data for {ticker}...")
+                
+                # Try to get cached analysis from database
+                try:
+                    from sqlalchemy import desc
+                    cached_analysis = db.query(AnalysisCache).filter_by(ticker=ticker).order_by(desc(AnalysisCache.updated_at)).first()
+                    
+                    if cached_analysis and cached_analysis.analysis_json:
+                        print(f"✅ Found cached analysis from {cached_analysis.updated_at}, returning that instead")
+                        analysis_json = json.loads(cached_analysis.analysis_json)
+                        cache_hit = True
+                        cache_age_hours = int((datetime.now(timezone.utc) - cached_analysis.updated_at).total_seconds() / 3600)
+                    else:
+                        # No cache available - must fail
+                        raise HTTPException(status_code=500, detail=f"{user_message} Your credit has been refunded.")
+                except HTTPException:
+                    raise
+                except Exception as fallback_error:
+                    print(f"❌ No cached data available: {fallback_error}")
+                    raise HTTPException(status_code=500, detail=f"{user_message} Your credit has been refunded.")
         
         # ========== STEP 4: LIVE PRICE INJECTION ==========
         print(f"💹 Fetching LIVE price for {ticker}")
