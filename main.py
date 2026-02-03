@@ -4431,18 +4431,67 @@ async def refresh_all_tickers(
                 
                 ai_payload = {k: v for k, v in financial_data.items() if k != 'chart_data'}
                 
-                # Simplified prompt for batch refresh
-                prompt = f"""Analyze {ticker} stock for long-term investors. Return JSON with:
-{{"summary_one_line": "One clear sentence about the company and outlook",
-"verdict": "BUY/SELL/HOLD",
-"confidence_score": 0-100,
-"intrinsic_value": estimated_fair_value_number,
-"chapter_1_the_business": "Business model and competitive position (3-4 sentences)",
-"chapter_2_financials": "Financial health analysis (3-4 sentences)",
-"chapter_3_valuation": "Valuation and price assessment (3-4 sentences)",
-"chapter_4_risks_and_catalysts": "Key risks and opportunities (3-4 sentences)"}}
+                # Use FULL prompt (same as main analyze endpoint) to generate complete data
+                prompt = f"""
+You are the Chief Investment Officer (CIO) at a prestigious Global Hedge Fund. 
+Your task is to produce an **EXHAUSTIVE, INSTITUTIONAL-GRADE INVESTMENT MEMO** for {ticker}.
 
-Financial Data: {json.dumps(ai_payload, default=str)}"""
+**Financial Data & News:** {json.dumps(ai_payload, default=str)}
+**Language:** Write strictly in English.
+
+**⚠️ CRITICAL INSTRUCTIONS:**
+1.  **EXTREME DEPTH:** Each text section must be LONG, DETAILED, and ANALYTICAL (aim for 400-600 words per chapter).
+2.  **SENTIMENT ANALYSIS:** Analyze the provided 'recent_news'. For each major news item, determine if it's Positive, Negative, or Neutral and assign an Impact Score (1-10).
+3.  **NO FLUFF:** Use professional financial terminology. Connect the news to the valuation.
+4.  **JSON FORMATTING:** You MUST return ONLY valid JSON. NO markdown code blocks, NO extra text. Ensure all quotes inside text fields are properly escaped.
+5.  **STRUCTURE:** Return strictly the JSON structure below.
+
+**REQUIRED JSON OUTPUT:**
+{{
+    "chapter_1_the_business": "Headline: The Business DNA. [Write 400+ words detailed essay]",
+    "chapter_2_financials": "Headline: Financial Health. [Write 400+ words detailed essay]",
+    "chapter_3_valuation": "Headline: Valuation Check. [Write 400+ words detailed essay]",
+    "upcoming_catalysts": {{
+        "next_earnings_date": "State the estimated or confirmed date",
+        "event_importance": "High/Medium/Low",
+        "analyst_expectation": "Briefly state what the market expects"
+    }},
+    "competitors": [
+        {{ "name": "Competitor 1", "ticker": "TICK1", "strength": "Main advantage" }},
+        {{ "name": "Competitor 2", "ticker": "TICK2", "strength": "Main advantage" }}
+    ],
+    "ownership_insights": {{
+        "institutional_sentiment": "Describe if institutions are buying/holding",
+        "insider_trading": "Briefly mention recent insider activity",
+        "dividend_safety": "Analyze dividend sustainability"
+    }},
+    "news_analysis": [
+        {{ "headline": "Title", "sentiment": "positive/negative/neutral", "impact_score": 8, "url": "link", "time": "2 hours ago" }}
+    ],
+    "bull_case_points": ["Point 1", "Point 2", "Point 3"],
+    "bear_case_points": ["Point 1", "Point 2", "Point 3"],
+    "forecasts": {{
+        "next_1_year": "12-month scenario analysis",
+        "next_5_years": "2030 outlook"
+    }},
+    "swot_analysis": {{
+        "strengths": ["S1", "S2", "S3"],
+        "weaknesses": ["W1", "W2", "W3"],
+        "opportunities": ["O1", "O2", "O3"],
+        "threats": ["T1", "T2", "T3"]
+    }},
+    "radar_scores": [
+        {{ "subject": "Value", "A": 8 }}, 
+        {{ "subject": "Growth", "A": 7 }},
+        {{ "subject": "Profitability", "A": 9 }}, 
+        {{ "subject": "Health", "A": 6 }},
+        {{ "subject": "Momentum", "A": 8 }}
+    ],
+    "verdict": "BUY/HOLD/SELL", 
+    "confidence_score": 85, 
+    "summary_one_line": "Executive summary"
+}}
+"""
                 
                 response = await asyncio.to_thread(
                     lambda: temp_client.models.generate_content(
