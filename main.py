@@ -2010,6 +2010,7 @@ async def analyze_stock(
                 cached_report = None  # This forces regeneration below
         elif force_refresh:
             print(f"⚡ FORCE REFRESH for {ticker} ({lang}). Skipping cache.")
+            cache_hit = False  # Force regeneration even if cache exists
         elif not cached_report:
             print(f"🆕 No cache found for {ticker} in {lang}. Will generate fresh analysis.")
         
@@ -4501,6 +4502,38 @@ Financial Data: {json.dumps(ai_payload, default=str)}"""
         "estimated_time": f"{total_tickers * 4 / 60:.0f} minutes",
         "estimated_cost": f"${total_tickers * 0.002:.2f}",
         "status": "Check server logs for progress"
+    }
+
+
+@app.delete("/admin/clear-cache/{ticker}")
+async def clear_ticker_cache(
+    ticker: str,
+    db: Session = Depends(get_db),
+    admin_key: str = None
+):
+    """
+    🗑️ ADMIN: Clear cached AI report for a specific ticker
+    Use this when cached data is corrupted or needs forced regeneration
+    """
+    ADMIN_SECRET = os.getenv("ADMIN_REFRESH_KEY", "tamtech_refresh_2026")
+    
+    if admin_key != ADMIN_SECRET:
+        raise HTTPException(status_code=403, detail="Invalid admin key")
+    
+    ticker = ticker.upper()
+    
+    # Delete all cached reports for this ticker (all languages)
+    deleted_count = db.query(AnalysisReport).filter(
+        AnalysisReport.ticker == ticker
+    ).delete()
+    
+    db.commit()
+    
+    return {
+        "success": True,
+        "ticker": ticker,
+        "deleted_reports": deleted_count,
+        "message": f"Cleared {deleted_count} cached report(s) for {ticker}. Next analysis will generate fresh data."
     }
 
 
