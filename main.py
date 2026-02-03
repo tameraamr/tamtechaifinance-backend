@@ -1795,6 +1795,79 @@ async def get_real_financial_data(ticker: str, db: Session = None, use_cache: bo
     
     return None
 
+async def get_live_price_and_news(ticker: str, db: Session = None, use_cache: bool = True):
+    """Fetch ONLY live price and news (10-minute cache). Metrics/chart stored with AI report."""
+    import asyncio
+    
+    # Check 10-minute price cache
+    if use_cache and db:
+        ten_minutes_ago = datetime.now(timezone.utc) - timedelta(minutes=10)
+        cached_price = db.query(MarketDataCache).filter(
+            MarketDataCache.ticker == ticker.upper(),
+            MarketDataCache.last_updated > ten_minutes_ago
+        ).first()
+        
+        if cached_price:
+            cache_age = (datetime.now(timezone.utc) - make_datetime_aware(cached_price.last_updated)).seconds
+            print(f"✅ Using cached price for {ticker} (age: {cache_age}s)")
+            return {
+                "price": cached_price.price,
+                "companyName": cached_price.name,
+                "currency": "USD"
+            }
+    
+    # Fetch fresh price
+    try:
+        stock = await asyncio.to_thread(yf.Ticker, ticker)
+        try: 
+            current_price = stock.fast_info['last_price']
+        except: 
+            info = await asyncio.to_thread(lambda: stock.info)
+            current_price = info.get('currentPrice') or info.get('regularMarketPrice')
+        
+        if not current_price:
+            return None
+        
+        info = await asyncio.to_thread(lambda: stock.info)
+        company_name = info.get('longName', ticker)
+        
+        # Update price cache (NOT full data)
+        if db and use_cache:
+            cache_entry = db.query(MarketDataCache).filter(
+                MarketDataCache.ticker == ticker.upper()
+            ).first()
+            
+            if cache_entry:
+                cache_entry.price = current_price
+                cache_entry.name = company_name
+                cache_entry.last_updated = datetime.now(timezone.utc)
+            else:
+                cache_entry = MarketDataCache(
+                    ticker=ticker.upper(),
+                    asset_type='stock',
+                    name=company_name,
+                    price=current_price,
+                    change_percent=0,
+                    last_updated=datetime.now(timezone.utc)
+                )
+                db.add(cache_entry)
+            
+            try:
+                db.commit()
+                print(f"✅ Updated price cache for {ticker}")
+            except:
+                db.rollback()
+        
+        return {
+            "price": current_price,
+            "companyName": company_name,
+            "currency": info.get('currency', 'USD')
+        }
+        
+    except Exception as e:
+        print(f"❌ Price fetch error: {e}")
+        return None
+
 @app.get("/search-ticker/{ticker}")
 async def search_ticker(ticker: str):
     """جلب اقتراحات الأسهم الحقيقية من Yahoo Finance"""
@@ -2283,8 +2356,58 @@ async def analyze_stock(
                     raise HTTPException(status_code=500, detail=f"{user_message} Your credit has been refunded.")
         
         # ========== STEP 4: LIVE PRICE INJECTION ==========
-        print(f"💹 Fetching LIVE price for {ticker}")
-        live_financial_data = await get_real_financial_data(ticker, db=db, use_cache=True)
+        # If using cached AI report, only fetch live price (not full metrics/chart)
+        # If generating new AI report, financial_data_for_ai already has everything
+        
+        if cache_hit:
+            # Cache hit: Fetch ONLY live price (10-min cache), use metrics/chart from cached report
+            print(f"💹 Fetching LIVE price for cached report")
+            live_price_data = await get_live_price_and_news(ticker, db=db, use_cache=True)
+            
+            if not live_price_data or not live_price_data.get('price'):
+                # Fallback to cached price from AI report
+                print(f"⚠️ Live price fetch failed, using price from cached analysis")
+                live_financial_data = {
+                    "symbol": ticker.upper(),
+                    "price": analysis_json.get("current_price", 0),
+                    "companyName": analysis_json.get("company_name", ticker),
+                    "currency": "USD",
+                    # Use ALL metrics and chart from cached AI report (7 days old)
+                    **{k: v for k, v in analysis_json.items() if k not in ["symbol", "price", "companyName", "currency"]}
+                }
+            else:
+                # Merge live price with cached analysis data
+                live_financial_data = {
+                    "symbol": ticker.upper(),
+                    "price": live_price_data["price"],
+                    "companyName": live_price_data["companyName"],
+                    "currency": live_price_data.get("currency", "USD"),
+                    # All metrics and chart from cached AI report (unchanged)
+                    "chart_data": analysis_json.get("chart_data", []),
+                    "pe_ratio": analysis_json.get("pe_ratio"),
+                    "forward_pe": analysis_json.get("forward_pe"),
+                    "peg_ratio": analysis_json.get("peg_ratio"),
+                    "price_to_sales": analysis_json.get("price_to_sales"),
+                    "price_to_book": analysis_json.get("price_to_book"),
+                    "eps": analysis_json.get("eps"),
+                    "beta": analysis_json.get("beta"),
+                    "dividend_yield": analysis_json.get("dividend_yield"),
+                    "profit_margins": analysis_json.get("profit_margins"),
+                    "operating_margins": analysis_json.get("operating_margins"),
+                    "return_on_equity": analysis_json.get("return_on_equity"),
+                    "debt_to_equity": analysis_json.get("debt_to_equity"),
+                    "revenue_growth": analysis_json.get("revenue_growth"),
+                    "current_ratio": analysis_json.get("current_ratio"),
+                    "market_cap": analysis_json.get("market_cap"),
+                    "fiftyTwoWeekHigh": analysis_json.get("fiftyTwoWeekHigh"),
+                    "fiftyTwoWeekLow": analysis_json.get("fiftyTwoWeekLow"),
+                    "targetMeanPrice": analysis_json.get("targetMeanPrice", "N/A"),
+                    "recommendationKey": analysis_json.get("recommendationKey", "none"),
+                }
+        else:
+            # New AI report: Use the full financial data we already fetched for AI
+            live_financial_data = financial_data_for_ai
+        
         use_cached_price = False
         
         if not live_financial_data or not live_financial_data.get('price'):
