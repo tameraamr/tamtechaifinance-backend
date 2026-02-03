@@ -183,6 +183,7 @@ class MarketDataCache(Base):
     sector = Column(String, nullable=True)  # Sector for stocks
     market_cap = Column(Float, nullable=True)  # Market cap (for stocks/crypto)
     volume = Column(Float, nullable=True)  # Trading volume
+    full_data_json = Column(Text, nullable=True)  # Full yfinance response (chart_data, metrics, etc.)
     last_updated = Column(DateTime, default=func.now(), index=True)
     created_at = Column(DateTime, default=func.now())
 
@@ -266,6 +267,17 @@ try:
         print("✅ Migration complete: gumroad_license_key column added")
     else:
         print("✅ gumroad_license_key column already exists")
+    
+    # Add full_data_json column to market_data_cache if it doesn't exist
+    market_cache_columns = [col['name'] for col in inspector.get_columns('market_data_cache')]
+    if 'full_data_json' not in market_cache_columns:
+        print("⚙️ Running migration: Adding full_data_json column to market_data_cache table...")
+        with engine.connect() as conn:
+            conn.execute(text("ALTER TABLE market_data_cache ADD COLUMN full_data_json TEXT"))
+            conn.commit()
+        print("✅ Migration complete: full_data_json column added")
+    else:
+        print("✅ full_data_json column already exists")
         
 except Exception as e:
     print(f"⚠️ Migration warning: {e}")
@@ -1649,12 +1661,26 @@ def suggest_stock():
     return get_random_ticker_v2()
 
 async def get_real_financial_data(ticker: str, db: Session = None, use_cache: bool = True):
-    """Fetch stock data with automatic retry on network failures and 10-minute caching"""
+    """Fetch stock data with automatic retry on network failures and 10-minute smart caching"""
     import asyncio
     
-    # 🚀 DISABLED LAZY CACHE - Always fetch full data from yfinance
-    # The 10-minute cache was returning zeros and empty chart_data
-    # Caching is handled at the analysis level, not here
+    # 🚀 SMART CACHE: Check for cached FULL data (10-minute TTL)
+    if use_cache and db:
+        ten_minutes_ago = datetime.now(timezone.utc) - timedelta(minutes=10)
+        cached_data = db.query(MarketDataCache).filter(
+            MarketDataCache.ticker == ticker.upper(),
+            MarketDataCache.last_updated > ten_minutes_ago
+        ).first()
+        
+        if cached_data and cached_data.full_data_json:
+            # Return REAL cached data (not zeros)
+            cache_age_seconds = (datetime.now(timezone.utc) - make_datetime_aware(cached_data.last_updated)).seconds
+            print(f"✅ Using FULL cached yfinance data for {ticker} (age: {cache_age_seconds}s)")
+            try:
+                return json.loads(cached_data.full_data_json)
+            except:
+                print(f"⚠️ Cache JSON parse failed for {ticker}, fetching fresh data")
+                # Continue to fetch fresh data if cache is corrupted
     
     # Fetch fresh data from yfinance
     max_retries = 3
@@ -1685,41 +1711,8 @@ async def get_real_financial_data(ticker: str, db: Session = None, use_cache: bo
             if attempt > 0:
                 print(f"✅ Price fetch succeeded on retry {attempt + 1}")
             
-            if db and use_cache:
-                # Update or create cache entry
-                cache_entry = db.query(MarketDataCache).filter(
-                    MarketDataCache.ticker == ticker.upper()
-                ).first()
-                
-                if cache_entry:
-                    cache_entry.price = current_price
-                    cache_entry.name = info.get('longName', ticker)
-                    cache_entry.market_cap = info.get('marketCap')
-                    cache_entry.sector = info.get('sector')
-                    cache_entry.volume = info.get('volume')
-                    cache_entry.last_updated = datetime.now(timezone.utc)
-                else:
-                    cache_entry = MarketDataCache(
-                        ticker=ticker.upper(),
-                        asset_type='stock',
-                        name=info.get('longName', ticker),
-                        price=current_price,
-                        change_percent=0,  # Calculate if needed
-                        sector=info.get('sector'),
-                        market_cap=info.get('marketCap'),
-                        volume=info.get('volume'),
-                        last_updated=datetime.now(timezone.utc)
-                    )
-                    db.add(cache_entry)
-                
-                try:
-                    db.commit()
-                    print(f"✅ Updated yfinance cache for {ticker}")
-                except Exception as cache_err:
-                    print(f"⚠️ Cache update failed: {cache_err}")
-                    db.rollback()
-            
-            return {
+            # Build complete response object BEFORE caching
+            response_data = {
                 "symbol": ticker.upper(),
                 "companyName": info.get('longName', ticker),
                 "price": current_price,
@@ -1730,10 +1723,10 @@ async def get_real_financial_data(ticker: str, db: Session = None, use_cache: bo
                 "targetMeanPrice": info.get('targetMeanPrice', "N/A"),
                 "recommendationKey": info.get('recommendationKey', "none"),
                 
-                # --- Advanced Metrics ---
+                # --- Advanced Metrics (None instead of 0 when missing) ---
                 "pe_ratio": info.get('trailingPE') or None,
                 "forward_pe": info.get('forwardPE') or None,
-                "peg_ratio": info.get('pegRatio') or None,  # Many stocks don't have PEG
+                "peg_ratio": info.get('pegRatio') or None,
                 "price_to_sales": info.get('priceToSalesTrailing12Months') or None,
                 "price_to_book": info.get('priceToBook') or None,
                 "eps": info.get('trailingEps') or None,
@@ -1750,6 +1743,44 @@ async def get_real_financial_data(ticker: str, db: Session = None, use_cache: bo
                 "recent_news": news[:5], 
                 "description": info.get('longBusinessSummary', "No description.")[:600] + "..."
             }
+            
+            # Store FULL response in cache (including chart_data and all metrics)
+            if db and use_cache:
+                cache_entry = db.query(MarketDataCache).filter(
+                    MarketDataCache.ticker == ticker.upper()
+                ).first()
+                
+                if cache_entry:
+                    cache_entry.price = current_price
+                    cache_entry.name = info.get('longName', ticker)
+                    cache_entry.market_cap = info.get('marketCap')
+                    cache_entry.sector = info.get('sector')
+                    cache_entry.volume = info.get('volume')
+                    cache_entry.full_data_json = json.dumps(response_data)  # Store complete data
+                    cache_entry.last_updated = datetime.now(timezone.utc)
+                else:
+                    cache_entry = MarketDataCache(
+                        ticker=ticker.upper(),
+                        asset_type='stock',
+                        name=info.get('longName', ticker),
+                        price=current_price,
+                        change_percent=0,
+                        sector=info.get('sector'),
+                        market_cap=info.get('marketCap'),
+                        volume=info.get('volume'),
+                        full_data_json=json.dumps(response_data),  # Store complete data
+                        last_updated=datetime.now(timezone.utc)
+                    )
+                    db.add(cache_entry)
+                
+                try:
+                    db.commit()
+                    print(f"✅ Updated yfinance cache for {ticker} with FULL data")
+                except Exception as cache_err:
+                    print(f"⚠️ Cache update failed: {cache_err}")
+                    db.rollback()
+            
+            return response_data
             
         except Exception as e:
             if attempt < max_retries - 1:
