@@ -4355,7 +4355,7 @@ async def refresh_all_tickers(
     force: bool = False  # NEW: Force refresh even if cache is fresh
 ):
     """
-    🔄 ADMIN ENDPOINT: Refresh all 270 tickers in the pool
+    🔄 ADMIN ENDPOINT: Refresh all 270 tickers in the pool (v2 - with full data)
     
     Use this weekly to keep all stock analyses fresh.
     Runs in background to avoid timeout.
