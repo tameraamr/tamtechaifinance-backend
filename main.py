@@ -1731,20 +1731,20 @@ async def get_real_financial_data(ticker: str, db: Session = None, use_cache: bo
                 "recommendationKey": info.get('recommendationKey', "none"),
                 
                 # --- Advanced Metrics ---
-                "pe_ratio": info.get('trailingPE', 0),
-                "forward_pe": info.get('forwardPE', 0),
-                "peg_ratio": info.get('pegRatio', 0),
-                "price_to_sales": info.get('priceToSalesTrailing12Months', 0),
-                "price_to_book": info.get('priceToBook', 0),
-                "eps": info.get('trailingEps', 0),
-                "beta": info.get('beta', 0),
-                "dividend_yield": (info.get('dividendYield', 0) or 0) * 100,
-                "profit_margins": (info.get('profitMargins', 0) or 0) * 100,
-                "operating_margins": (info.get('operatingMargins', 0) or 0) * 100,
-                "return_on_equity": (info.get('returnOnEquity', 0) or 0) * 100,
-                "debt_to_equity": (info.get('debtToEquity', 0) or 0),
-                "revenue_growth": (info.get('revenueGrowth', 0) or 0) * 100,
-                "current_ratio": info.get('currentRatio', 0),
+                "pe_ratio": info.get('trailingPE') or None,
+                "forward_pe": info.get('forwardPE') or None,
+                "peg_ratio": info.get('pegRatio') or None,  # Many stocks don't have PEG
+                "price_to_sales": info.get('priceToSalesTrailing12Months') or None,
+                "price_to_book": info.get('priceToBook') or None,
+                "eps": info.get('trailingEps') or None,
+                "beta": info.get('beta') or None,
+                "dividend_yield": (info.get('dividendYield', 0) or 0) * 100 if info.get('dividendYield') else None,
+                "profit_margins": (info.get('profitMargins', 0) or 0) * 100 if info.get('profitMargins') else None,
+                "operating_margins": (info.get('operatingMargins', 0) or 0) * 100 if info.get('operatingMargins') else None,
+                "return_on_equity": (info.get('returnOnEquity', 0) or 0) * 100 if info.get('returnOnEquity') else None,
+                "debt_to_equity": (info.get('debtToEquity', 0) or 0) if info.get('debtToEquity') else None,
+                "revenue_growth": (info.get('revenueGrowth', 0) or 0) * 100 if info.get('revenueGrowth') else None,
+                "current_ratio": info.get('currentRatio') or None,
                 
                 "chart_data": chart_data,
                 "recent_news": news[:5], 
@@ -2077,13 +2077,13 @@ async def analyze_stock(
                                 delay = base_delay * (2 ** attempt)  # Exponential: 2s, 4s, 8s
                                 print(f"⏳ Rate limit hit, retrying in {delay}s (attempt {attempt + 1}/{max_retries})...")
                                 await asyncio.sleep(delay)
-                                continue
+                                continue  # Don't record failure yet, still retrying
                             else:
                                 print(f"❌ Rate limit persists after {max_retries} retries")
                                 gemini_circuit_breaker.record_failure()
                                 raise model_err
                         
-                        # Record failure for circuit breaker
+                        # Record failure for circuit breaker (only on non-retry errors)
                         gemini_circuit_breaker.record_failure()
                         
                         if "404" in error_str or "not found" in error_str.lower() or "model" in error_str.lower():
