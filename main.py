@@ -2241,11 +2241,11 @@ async def analyze_stock(
                         print(f"✅ JSON repaired successfully!")
                     except json.JSONDecodeError as repair_err:
                         print(f"❌ JSON repair failed: {repair_err}")
-                        # REFUND CREDIT BEFORE raising exception
-                        if current_user:
+                        # REFUND CREDIT ONLY if this was NOT during a retry (avoid multiple refunds)
+                        if current_user and attempt == max_retries - 1:  # Only refund on final attempt
                             current_user.credits += 1
                             db.commit()
-                            print(f"❌ JSON Error - Refunded 1 credit to {current_user.email}. Balance: {current_user.credits}")
+                            print(f"❌ JSON Error (final attempt) - Refunded 1 credit to {current_user.email}. Balance: {current_user.credits}")
                         else:
                             if guest:
                                 guest.attempts -= 1
