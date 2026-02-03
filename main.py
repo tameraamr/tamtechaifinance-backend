@@ -2244,16 +2244,16 @@ async def analyze_stock(
                 print(f"⚠️ AI Error: {user_message}")
                 print(f"🔍 Checking if we have ANY cached data for {ticker}...")
                 
-                # Try to get cached analysis from database
+                # Try to get cached analysis from database (AnalysisReport, not AnalysisCache)
                 try:
                     from sqlalchemy import desc
-                    cached_analysis = db.query(AnalysisCache).filter_by(ticker=ticker).order_by(desc(AnalysisCache.updated_at)).first()
+                    cached_report = db.query(AnalysisReport).filter_by(ticker=ticker).order_by(desc(AnalysisReport.updated_at)).first()
                     
-                    if cached_analysis and cached_analysis.analysis_json:
-                        print(f"✅ Found cached analysis from {cached_analysis.updated_at}, returning that instead")
-                        analysis_json = json.loads(cached_analysis.analysis_json)
+                    if cached_report and cached_report.ai_json_data:
+                        print(f"✅ Found cached report from {cached_report.updated_at}, returning that instead")
+                        analysis_json = json.loads(cached_report.ai_json_data)
                         cache_hit = True
-                        cache_age_hours = int((datetime.now(timezone.utc) - cached_analysis.updated_at).total_seconds() / 3600)
+                        cache_age_hours = int((datetime.now(timezone.utc) - cached_report.updated_at).total_seconds() / 3600)
                     else:
                         # No cache available - must fail
                         raise HTTPException(status_code=500, detail=f"{user_message} Your credit has been refunded.")
