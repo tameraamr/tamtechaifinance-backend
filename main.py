@@ -1652,45 +1652,9 @@ async def get_real_financial_data(ticker: str, db: Session = None, use_cache: bo
     """Fetch stock data with automatic retry on network failures and 10-minute caching"""
     import asyncio
     
-    # 🚀 PERFORMANCE OPTIMIZATION: Check cache first (10-minute TTL)
-    if use_cache and db:
-        ten_minutes_ago = datetime.now(timezone.utc) - timedelta(minutes=10)
-        cached_data = db.query(MarketDataCache).filter(
-            MarketDataCache.ticker == ticker.upper(),
-            MarketDataCache.last_updated > ten_minutes_ago
-        ).first()
-        
-        if cached_data:
-            print(f"✅ Using cached yfinance data for {ticker} (age: {(datetime.now(timezone.utc) - make_datetime_aware(cached_data.last_updated)).seconds}s)")
-            # Return in the same format as fresh data
-            return {
-                "symbol": cached_data.ticker,
-                "companyName": cached_data.name,
-                "price": cached_data.price,
-                "currency": "USD",
-                "market_cap": cached_data.market_cap or "N/A",
-                "fiftyTwoWeekHigh": cached_data.price * 1.2,  # Approximation
-                "fiftyTwoWeekLow": cached_data.price * 0.8,   # Approximation
-                "targetMeanPrice": "N/A",
-                "recommendationKey": "none",
-                "pe_ratio": 0,
-                "forward_pe": 0,
-                "peg_ratio": 0,
-                "price_to_sales": 0,
-                "price_to_book": 0,
-                "eps": 0,
-                "beta": 0,
-                "dividend_yield": 0,
-                "profit_margins": 0,
-                "operating_margins": 0,
-                "return_on_equity": 0,
-                "debt_to_equity": 0,
-                "revenue_growth": 0,
-                "current_ratio": 0,
-                "chart_data": [],
-                "news": [],
-                "from_cache": True  # Flag to indicate cached data
-            }
+    # 🚀 DISABLED LAZY CACHE - Always fetch full data from yfinance
+    # The 10-minute cache was returning zeros and empty chart_data
+    # Caching is handled at the analysis level, not here
     
     # Fetch fresh data from yfinance
     max_retries = 3
@@ -2302,7 +2266,7 @@ async def analyze_stock(
                     "symbol": ticker.upper(),
                     "price": analysis_json.get("current_price", 0),
                     "companyName": analysis_json.get("company_name", ticker),
-                    "chart_data": [],  # No fresh chart data available
+                    "chart_data": analysis_json.get("chart_data", []),
                     "currency": "USD"
                 }
             else:
