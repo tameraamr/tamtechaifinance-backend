@@ -2081,45 +2081,69 @@ async def analyze_stock(
                 
                 # Add timeout protection (30 seconds max)
                 import asyncio
-                try:
-                    # Try Gemini 2.0 Flash first
-                    response = await asyncio.to_thread(
-                        lambda: client.models.generate_content(
-                            model='gemini-2.0-flash',
-                            contents=prompt,
-                            config=types.GenerateContentConfig(
-                                response_mime_type="application/json",
-                                temperature=0.3  # Lower temperature for more consistent JSON formatting
-                            )
-                        )
-                    )
-                    # Record success
-                    gemini_circuit_breaker.record_success()
-                except Exception as model_err:
-                    # Record failure for circuit breaker
-                    gemini_circuit_breaker.record_failure()
-                    
-                    if "404" in str(model_err) or "not found" in str(model_err).lower() or "model" in str(model_err).lower():
-                        print(f"⚠️ Gemini 2.0 Flash not available, falling back to 1.5 Flash: {model_err}")
-                        try:
-                            response = await asyncio.to_thread(
-                                lambda: client.models.generate_content(
-                                    model='gemini-1.5-flash',
-                                    contents=prompt,
-                                    config=types.GenerateContentConfig(
-                                        response_mime_type="application/json",
-                                        temperature=0.3
-                                    )
+                import time
+                
+                # Retry logic with exponential backoff for 429 errors
+                max_retries = 3
+                base_delay = 2  # seconds
+                
+                for attempt in range(max_retries):
+                    try:
+                        # Try Gemini 2.0 Flash first
+                        response = await asyncio.to_thread(
+                            lambda: client.models.generate_content(
+                                model='gemini-2.0-flash',
+                                contents=prompt,
+                                config=types.GenerateContentConfig(
+                                    response_mime_type="application/json",
+                                    temperature=0.3  # Lower temperature for more consistent JSON formatting
                                 )
                             )
-                            # Record success if fallback works
-                            gemini_circuit_breaker.record_success()
-                        except Exception as fallback_err:
-                            print(f"❌ Fallback also failed: {fallback_err}")
-                            gemini_circuit_breaker.record_failure()
-                            raise fallback_err
-                    else:
-                        raise model_err
+                        )
+                        # Record success
+                        gemini_circuit_breaker.record_success()
+                        break  # Success! Exit retry loop
+                        
+                    except Exception as model_err:
+                        error_str = str(model_err)
+                        
+                        # Check if it's a 429 rate limit error
+                        if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
+                            if attempt < max_retries - 1:
+                                delay = base_delay * (2 ** attempt)  # Exponential: 2s, 4s, 8s
+                                print(f"⏳ Rate limit hit, retrying in {delay}s (attempt {attempt + 1}/{max_retries})...")
+                                await asyncio.sleep(delay)
+                                continue
+                            else:
+                                print(f"❌ Rate limit persists after {max_retries} retries")
+                                gemini_circuit_breaker.record_failure()
+                                raise model_err
+                        
+                        # Record failure for circuit breaker
+                        gemini_circuit_breaker.record_failure()
+                        
+                        if "404" in error_str or "not found" in error_str.lower() or "model" in error_str.lower():
+                            print(f"⚠️ Gemini 2.0 Flash not available, falling back to 1.5 Flash: {model_err}")
+                            try:
+                                response = await asyncio.to_thread(
+                                    lambda: client.models.generate_content(
+                                        model='gemini-1.5-flash',
+                                        contents=prompt,
+                                        config=types.GenerateContentConfig(
+                                            response_mime_type="application/json",
+                                            temperature=0.3
+                                        )
+                                    )
+                                )
+                                # Record success if fallback works
+                                gemini_circuit_breaker.record_success()
+                                break
+                            except Exception as fallback_err:
+                                print(f"❌ Fallback also failed: {fallback_err}")
+                                gemini_circuit_breaker.record_failure()
+                                raise fallback_err
+                        else:
+                            raise model_err
                 
                 # Parse JSON with repair attempts for malformed responses
                 raw_response_text = response.text
