@@ -4458,15 +4458,44 @@ Financial Data: {json.dumps(ai_payload, default=str)}"""
                 gemini_circuit_breaker.record_success()
                 analysis_json = json.loads(response.text)
                 
-                # Update or create report
+                # CRITICAL: Merge AI analysis WITH financial metrics/chart data
+                # Store COMPLETE data like the main analyze endpoint does
+                complete_data = {
+                    **analysis_json,  # AI analysis (verdict, chapters, etc.)
+                    # Add financial metrics from yfinance
+                    "current_price": financial_data.get("price"),
+                    "company_name": financial_data.get("companyName"),
+                    "pe_ratio": financial_data.get("pe_ratio"),
+                    "forward_pe": financial_data.get("forward_pe"),
+                    "peg_ratio": financial_data.get("peg_ratio"),
+                    "price_to_sales": financial_data.get("price_to_sales"),
+                    "price_to_book": financial_data.get("price_to_book"),
+                    "eps": financial_data.get("eps"),
+                    "beta": financial_data.get("beta"),
+                    "dividend_yield": financial_data.get("dividend_yield"),
+                    "profit_margins": financial_data.get("profit_margins"),
+                    "operating_margins": financial_data.get("operating_margins"),
+                    "return_on_equity": financial_data.get("return_on_equity"),
+                    "debt_to_equity": financial_data.get("debt_to_equity"),
+                    "revenue_growth": financial_data.get("revenue_growth"),
+                    "current_ratio": financial_data.get("current_ratio"),
+                    "market_cap": financial_data.get("market_cap"),
+                    "fiftyTwoWeekHigh": financial_data.get("fiftyTwoWeekHigh"),
+                    "fiftyTwoWeekLow": financial_data.get("fiftyTwoWeekLow"),
+                    "targetMeanPrice": financial_data.get("targetMeanPrice"),
+                    "recommendationKey": financial_data.get("recommendationKey"),
+                    "chart_data": financial_data.get("chart_data", [])
+                }
+                
+                # Update or create report with COMPLETE data
                 if cached:
-                    cached.ai_json_data = json.dumps(analysis_json)
+                    cached.ai_json_data = json.dumps(complete_data)
                     cached.updated_at = datetime.now(timezone.utc)
                 else:
                     new_report = AnalysisReport(
                         ticker=ticker,
                         language="en",
-                        ai_json_data=json.dumps(analysis_json),
+                        ai_json_data=json.dumps(complete_data),
                         created_at=datetime.now(timezone.utc),
                         updated_at=datetime.now(timezone.utc)
                     )
