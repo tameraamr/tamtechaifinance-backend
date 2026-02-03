@@ -2083,7 +2083,7 @@ async def analyze_stock(
             "url": "direct link to the news",
             "time": "e.g., 2 hours ago or Oct 24"
         }}
-    ]
+    ],
 
             "bull_case_points": ["Detailed point 1", "Detailed point 2", "Detailed point 3"],
             "bear_case_points": ["Detailed point 1", "Detailed point 2", "Detailed point 3"],
