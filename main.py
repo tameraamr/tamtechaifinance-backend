@@ -1106,6 +1106,17 @@ print(f"✅ Ticker Pool Loaded: {len(TICKER_POOL)} stocks (NO SMCI, NO PLTR)")
 
 app = FastAPI()
 
+# Auto-create Trading Journal table on startup
+@app.on_event("startup")
+async def startup_event():
+    """Create missing database tables on startup"""
+    try:
+        print("🔨 Checking/creating trading_journal table...")
+        Base.metadata.create_all(bind=engine, checkfirst=True)
+        print("✅ Database tables ready!")
+    except Exception as e:
+        print(f"⚠️ Table creation warning: {e}")
+
 # 👇 CORS Configuration - Updated for httpOnly cookie authentication
 origins = [
     "http://localhost:3000",
