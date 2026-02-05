@@ -509,7 +509,7 @@ def get_ticker_sector(ticker: str, info: dict) -> str:
             return 'ETF - Mixed Assets'
 
     # Crypto Classification
-    elif ticker_upper in ['BTC-USD', 'ETH-USD', 'BNB-USD', 'ADA-USD', 'SOL-USD', 'DOT-USD', 'DOGE-USD', 'AVAX-USD', 'LTC-USD', 'MATIC-USD']:
+    elif ticker_upper in ['BTC-USD', 'ETH-USD', 'BNB-USD', 'ADA-USD', 'SOL-USD', 'DOT-USD', 'DOGE-USD', 'AVAX-USD', 'LTC-USD', 'XRP-USD']:
         return 'Cryptocurrency'
 
     # Commodity Classification
@@ -2153,7 +2153,7 @@ async def analyze_stock(
                 import time
                 
                 # Retry logic with exponential backoff for 429 errors
-                max_retries = 3
+                max_retries = 5  # Increased from 3 to 5 for better resilience
                 base_delay = 2  # seconds
                 
                 for attempt in range(max_retries):
@@ -2346,7 +2346,9 @@ async def analyze_stock(
                         print(f"✅ Found cached report from {cached_report.updated_at}, returning that instead")
                         analysis_json = json.loads(cached_report.ai_json_data)
                         cache_hit = True
-                        cache_age_hours = int((datetime.now(timezone.utc) - cached_report.updated_at).total_seconds() / 3600)
+                        # Fix timezone-aware comparison
+                        cached_time = make_datetime_aware(cached_report.updated_at)
+                        cache_age_hours = int((datetime.now(timezone.utc) - cached_time).total_seconds() / 3600)
                     else:
                         # No cache available - must fail
                         raise HTTPException(status_code=500, detail=f"{user_message} Your credit has been refunded.")
@@ -2609,7 +2611,7 @@ def get_market_winners_losers(db: Session = Depends(get_db)):
                 "WMT", "COST", "HD", "LOW", "TGT", "DG", "DLTR", "KR", "CVS"
             ],
             "crypto": [
-                "BTC-USD", "ETH-USD", "BNB-USD", "ADA-USD", "SOL-USD", "DOT-USD", "DOGE-USD", "AVAX-USD", "LTC-USD", "MATIC-USD",
+                "BTC-USD", "ETH-USD", "BNB-USD", "ADA-USD", "SOL-USD", "DOT-USD", "DOGE-USD", "AVAX-USD", "LTC-USD", "XRP-USD",
                 "LINK-USD", "ALGO-USD", "VET-USD", "ICP-USD", "FIL-USD", "TRX-USD", "ETC-USD", "XLM-USD", "THETA-USD", "HBAR-USD"
             ],
             "commodities": [
@@ -3514,7 +3516,7 @@ async def get_master_universe_heatmap(background_tasks: BackgroundTasks, db: Ses
             ],
             # ₿ CRYPTOCURRENCIES
             "crypto": [
-                "BTC-USD", "ETH-USD", "BNB-USD", "ADA-USD", "SOL-USD", "DOT-USD", "DOGE-USD", "AVAX-USD", "LTC-USD", "MATIC-USD",
+                "BTC-USD", "ETH-USD", "BNB-USD", "ADA-USD", "SOL-USD", "DOT-USD", "DOGE-USD", "AVAX-USD", "LTC-USD", "XRP-USD",
                 "LINK-USD", "ALGO-USD", "VET-USD", "ICP-USD", "FIL-USD", "TRX-USD", "ETC-USD", "XLM-USD", "THETA-USD", "HBAR-USD"
             ],
             # 🛢️ COMMODITIES
