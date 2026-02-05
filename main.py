@@ -205,8 +205,8 @@ class TradingJournal(Base):
     lot_size = Column(Float, nullable=False)  # Standard (1.0), Mini (0.1), Micro (0.01)
     lot_type = Column(String)  # 'Standard', 'Mini', 'Micro'
     entry_price = Column(Float, nullable=False)
-    stop_loss = Column(Float, nullable=False)
-    take_profit = Column(Float, nullable=False)
+    stop_loss = Column(Float)  # Optional - not all traders use stop loss
+    take_profit = Column(Float)  # Optional - not all traders use take profit
     exit_price = Column(Float)  # Actual exit price (null if still open)
     
     # Execution Timing
@@ -1275,12 +1275,12 @@ class TradeCreate(BaseModel):
     lot_size: float
     lot_type: Optional[str] = None
     entry_price: float
-    stop_loss: float
-    take_profit: float
+    stop_loss: Optional[float] = None  # Made optional
+    take_profit: Optional[float] = None  # Made optional
     exit_price: Optional[float] = None
     entry_time: datetime
     exit_time: Optional[datetime] = None
-    account_size_at_entry: float
+    account_size_at_entry: Optional[float] = None  # Made optional
     notes: Optional[str] = None
 
 class TradeUpdate(BaseModel):
@@ -1303,8 +1303,8 @@ class TradeResponse(BaseModel):
     lot_size: float
     lot_type: Optional[str]
     entry_price: float
-    stop_loss: float
-    take_profit: float
+    stop_loss: Optional[float]  # Made optional
+    take_profit: Optional[float]  # Made optional
     exit_price: Optional[float]
     entry_time: datetime
     exit_time: Optional[datetime]
@@ -1314,7 +1314,7 @@ class TradeResponse(BaseModel):
     risk_percentage: Optional[float]
     profit_loss_usd: Optional[float]
     profit_loss_pips: Optional[float]
-    account_size_at_entry: float
+    account_size_at_entry: Optional[float]  # Made optional
     status: str
     result: Optional[str]
     notes: Optional[str]
