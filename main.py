@@ -5265,7 +5265,7 @@ async def get_all_articles_admin(
 @app.post("/journal/trades", response_model=TradeResponse)
 async def create_trade(
     trade: TradeCreate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_mandatory),
     db: Session = Depends(get_db)
 ):
     """
@@ -5339,7 +5339,7 @@ async def get_all_trades(
     status: Optional[str] = None,
     limit: int = 100,
     offset: int = 0,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_mandatory),
     db: Session = Depends(get_db)
 ):
     """
@@ -5361,7 +5361,7 @@ async def get_all_trades(
 @app.get("/journal/trades/{trade_id}", response_model=TradeResponse)
 async def get_trade(
     trade_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_mandatory),
     db: Session = Depends(get_db)
 ):
     """
@@ -5382,7 +5382,7 @@ async def get_trade(
 async def update_trade(
     trade_id: int,
     trade_update: TradeUpdate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_mandatory),
     db: Session = Depends(get_db)
 ):
     """
@@ -5446,7 +5446,7 @@ async def update_trade(
 @app.delete("/journal/trades/{trade_id}")
 async def delete_trade(
     trade_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_mandatory),
     db: Session = Depends(get_db)
 ):
     """
@@ -5468,7 +5468,7 @@ async def delete_trade(
 
 @app.get("/journal/stats", response_model=JournalStats)
 async def get_journal_stats(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_mandatory),
     db: Session = Depends(get_db)
 ):
     """
@@ -5546,7 +5546,7 @@ async def get_journal_stats(
 @app.post("/journal/trades/{trade_id}/ai-review")
 async def get_ai_trade_review(
     trade_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_mandatory),
     db: Session = Depends(get_db)
 ):
     """
