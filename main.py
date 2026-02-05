@@ -1126,14 +1126,14 @@ origins = [
     "https://www.tamtech-finance.com",
 ]
 
-# app.add_middleware(
-#     CORSMiddleware,
-#     allow_origins=origins, # ✅ Must specify exact origins when using credentials (not "*")
-#     allow_credentials=True, # ✅ Required for httpOnly cookies
-#     allow_methods=["*"],
-#     allow_headers=["*"],
-#     expose_headers=["*"]
-# )
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins, # ✅ Must specify exact origins when using credentials (not "*")
+    allow_credentials=True, # ✅ Required for httpOnly cookies
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["*"]
+)
 
 # ========== SECURITY MIDDLEWARE - Block Malicious Scanners ==========
 from collections import defaultdict
