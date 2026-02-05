@@ -1273,14 +1273,12 @@ class TradeCreate(BaseModel):
     strategy: Optional[str] = None
     order_type: str  # 'Buy', 'Sell'
     lot_size: float
-    lot_type: Optional[str] = None
     entry_price: float
-    stop_loss: Optional[float] = None  # Made optional
-    take_profit: Optional[float] = None  # Made optional
+    stop_loss: Optional[float] = None
+    take_profit: Optional[float] = None
     exit_price: Optional[float] = None
     entry_time: datetime
     exit_time: Optional[datetime] = None
-    account_size_at_entry: Optional[float] = None  # Made optional
     notes: Optional[str] = None
 
 class TradeUpdate(BaseModel):
@@ -1301,27 +1299,18 @@ class TradeResponse(BaseModel):
     strategy: Optional[str]
     order_type: str
     lot_size: float
-    lot_type: Optional[str]
     entry_price: float
-    stop_loss: Optional[float]  # Made optional
-    take_profit: Optional[float]  # Made optional
+    stop_loss: Optional[float]
+    take_profit: Optional[float]
     exit_price: Optional[float]
     entry_time: datetime
     exit_time: Optional[datetime]
-    pips_gained: Optional[float]
     risk_reward_ratio: Optional[float]
-    risk_amount_usd: Optional[float]
-    risk_percentage: Optional[float]
     profit_loss_usd: Optional[float]
     profit_loss_pips: Optional[float]
-    account_size_at_entry: Optional[float]  # Made optional
     status: str
     result: Optional[str]
     notes: Optional[str]
-    ai_trade_score: Optional[int]
-    ai_review: Optional[str]
-    created_at: datetime
-    updated_at: datetime
     
     class Config:
         from_attributes = True
