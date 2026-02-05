@@ -578,8 +578,46 @@ def get_ticker_sector(ticker: str, info: dict) -> str:
         # Try to infer from company name or other info
         industry = info.get("industry", "").lower()
         if industry:
-            return industry
-        return "Other"
+            # Map common industries to sectors
+            industry_sector_map = {
+                'software': 'Technology',
+                'internet': 'Technology',
+                'semiconductor': 'Technology',
+                'computer': 'Technology',
+                'pharmaceutical': 'Healthcare',
+                'biotechnology': 'Healthcare',
+                'medical': 'Healthcare',
+                'bank': 'Financial Services',
+                'financial': 'Financial Services',
+                'insurance': 'Financial Services',
+                'automotive': 'Consumer Cyclical',
+                'retail': 'Consumer Defensive',
+                'beverage': 'Consumer Defensive',
+                'food': 'Consumer Defensive',
+                'energy': 'Energy',
+                'oil': 'Energy',
+                'gas': 'Energy',
+                'industrial': 'Industrials',
+                'manufacturing': 'Industrials',
+                'aerospace': 'Industrials',
+                'defense': 'Industrials',
+                'real estate': 'Real Estate',
+                'REIT': 'Real Estate',
+                'materials': 'Basic Materials',
+                'chemical': 'Basic Materials',
+                'mining': 'Basic Materials',
+                'utilities': 'Utilities',
+                'telecommunication': 'Communication Services',
+                'media': 'Communication Services',
+                'entertainment': 'Communication Services'
+            }
+            
+            for key, sector in industry_sector_map.items():
+                if key in industry:
+                    return sector
+        
+        # Final fallback
+        return 'Unknown'
 
 # ==================== TRADING JOURNAL HELPER FUNCTIONS ====================
 
@@ -729,48 +767,6 @@ def calculate_trade_metrics(trade_data: dict) -> dict:
     }
 
 # ==================== END TRADING JOURNAL HELPERS ====================
-
-
-            # Map common industries to sectors
-            industry_sector_map = {
-                'software': 'Technology',
-                'internet': 'Technology',
-                'semiconductor': 'Technology',
-                'computer': 'Technology',
-                'pharmaceutical': 'Healthcare',
-                'biotechnology': 'Healthcare',
-                'medical': 'Healthcare',
-                'bank': 'Financial Services',
-                'financial': 'Financial Services',
-                'insurance': 'Financial Services',
-                'automotive': 'Consumer Cyclical',
-                'retail': 'Consumer Defensive',
-                'beverage': 'Consumer Defensive',
-                'food': 'Consumer Defensive',
-                'energy': 'Energy',
-                'oil': 'Energy',
-                'gas': 'Energy',
-                'industrial': 'Industrials',
-                'manufacturing': 'Industrials',
-                'aerospace': 'Industrials',
-                'defense': 'Industrials',
-                'real estate': 'Real Estate',
-                ' REIT': 'Real Estate',
-                'materials': 'Basic Materials',
-                'chemical': 'Basic Materials',
-                'mining': 'Basic Materials',
-                'utilities': 'Utilities',
-                'telecommunication': 'Communication Services',
-                'media': 'Communication Services',
-                'entertainment': 'Communication Services'
-            }
-
-            for key, sector in industry_sector_map.items():
-                if key in industry:
-                    return sector
-
-        # Final fallback
-        return 'Unknown'
 
 def batch_fetch_market_data(tickers: list, asset_types: dict = None):
     """
