@@ -202,31 +202,26 @@ class TradingJournal(Base):
     
     # Order Details
     order_type = Column(String, nullable=False)  # 'Buy', 'Sell'
-    lot_size = Column(Float, nullable=False)  # Standard (1.0), Mini (0.1), Micro (0.01)
-    lot_type = Column(String)  # 'Standard', 'Mini', 'Micro'
+    lot_size = Column(Float, nullable=False)
     entry_price = Column(Float, nullable=False)
-    stop_loss = Column(Float)  # Optional - not all traders use stop loss
-    take_profit = Column(Float)  # Optional - not all traders use take profit
+    stop_loss = Column(Float)  # Optional
+    take_profit = Column(Float)  # Optional
     exit_price = Column(Float)  # Actual exit price (null if still open)
     
     # Execution Timing
     entry_time = Column(DateTime, nullable=False)
     exit_time = Column(DateTime)  # Null if trade still open
     
-    # Calculated Fields (stored for performance)
-    pips_gained = Column(Float)  # Calculated pips
+    # Performance Metrics
     risk_reward_ratio = Column(Float)  # R:R ratio
-    risk_amount_usd = Column(Float)  # Risk in dollars
-    risk_percentage = Column(Float)  # Risk as % of account
     profit_loss_usd = Column(Float)  # P&L in dollars
     profit_loss_pips = Column(Float)  # P&L in pips
-    account_size_at_entry = Column(Float)  # Account size when trade was entered
     
     # Trade Outcome
     status = Column(String, default='open')  # 'open', 'closed'
     result = Column(String)  # 'win', 'loss', 'breakeven'
     
-    # Notes & AI Review
+    # Notes
     notes = Column(Text)  # User's trade notes
     ai_trade_score = Column(Integer)  # Gemini AI score (1-10) for PRO users
     ai_review = Column(Text)  # AI feedback on the trade
