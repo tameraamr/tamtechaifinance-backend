@@ -578,6 +578,8 @@ def get_ticker_sector(ticker: str, info: dict) -> str:
         # Try to infer from company name or other info
         industry = info.get("industry", "").lower()
         if industry:
+            return industry
+        return "Other"
 
 # ==================== TRADING JOURNAL HELPER FUNCTIONS ====================
 
