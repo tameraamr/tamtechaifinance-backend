@@ -187,7 +187,60 @@ class MarketDataCache(Base):
     last_updated = Column(DateTime, default=func.now(), index=True)
     created_at = Column(DateTime, default=func.now())
 
-# 7. Articles - Content management system for TamtechAI articles
+# 7. Trading Journal - Professional trading journal for Forex/Gold/Indices
+class TradingJournal(Base):
+    __tablename__ = "trading_journal"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, index=True, nullable=False)  # FK to users
+    
+    # Asset & Market Context
+    pair_ticker = Column(String, index=True, nullable=False)  # XAUUSD, NAS100, EURUSD, etc.
+    asset_type = Column(String, nullable=False)  # 'forex', 'gold', 'indices'
+    market_trend = Column(String)  # 'Bullish', 'Bearish', 'Ranging'
+    trading_session = Column(String)  # 'London', 'NY', 'Asia', 'Sydney'
+    strategy = Column(String)  # User's trading strategy name
+    
+    # Order Details
+    order_type = Column(String, nullable=False)  # 'Buy', 'Sell'
+    lot_size = Column(Float, nullable=False)  # Standard (1.0), Mini (0.1), Micro (0.01)
+    lot_type = Column(String)  # 'Standard', 'Mini', 'Micro'
+    entry_price = Column(Float, nullable=False)
+    stop_loss = Column(Float, nullable=False)
+    take_profit = Column(Float, nullable=False)
+    exit_price = Column(Float)  # Actual exit price (null if still open)
+    
+    # Execution Timing
+    entry_time = Column(DateTime, nullable=False)
+    exit_time = Column(DateTime)  # Null if trade still open
+    
+    # Calculated Fields (stored for performance)
+    pips_gained = Column(Float)  # Calculated pips
+    risk_reward_ratio = Column(Float)  # R:R ratio
+    risk_amount_usd = Column(Float)  # Risk in dollars
+    risk_percentage = Column(Float)  # Risk as % of account
+    profit_loss_usd = Column(Float)  # P&L in dollars
+    profit_loss_pips = Column(Float)  # P&L in pips
+    account_size_at_entry = Column(Float)  # Account size when trade was entered
+    
+    # Trade Outcome
+    status = Column(String, default='open')  # 'open', 'closed'
+    result = Column(String)  # 'win', 'loss', 'breakeven'
+    
+    # Notes & AI Review
+    notes = Column(Text)  # User's trade notes
+    ai_trade_score = Column(Integer)  # Gemini AI score (1-10) for PRO users
+    ai_review = Column(Text)  # AI feedback on the trade
+    
+    # Metadata
+    created_at = Column(DateTime, default=func.now(), index=True)
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    
+    __table_args__ = (
+        Index('idx_trading_journal_user_date', 'user_id', 'entry_time'),
+        Index('idx_trading_journal_user_status', 'user_id', 'status'),
+    )
+
+# 8. Articles - Content management system for TamtechAI articles
 class Article(Base):
     __tablename__ = "articles"
     id = Column(Integer, primary_key=True, index=True)
@@ -525,6 +578,157 @@ def get_ticker_sector(ticker: str, info: dict) -> str:
         # Try to infer from company name or other info
         industry = info.get("industry", "").lower()
         if industry:
+
+# ==================== TRADING JOURNAL HELPER FUNCTIONS ====================
+
+def calculate_pips(asset_type: str, pair_ticker: str, entry_price: float, exit_price: float, order_type: str) -> float:
+    """
+    Calculate pips gained/lost based on asset type
+    
+    Forex: 
+        - Standard pairs (5 decimals): 0.00010 = 1 pip
+        - JPY pairs (3 decimals): 0.010 = 1 pip
+    Gold (XAUUSD): 
+        - 2 decimals: 0.10 = 1 pip
+    Indices (NAS100, US30, etc.):
+        - 2 decimals: 0.10 = 1 pip (some use 1 point = 1 pip)
+    """
+    # Calculate price difference
+    if order_type.lower() == 'buy':
+        price_diff = exit_price - entry_price
+    else:  # Sell
+        price_diff = entry_price - exit_price
+    
+    # Determine pip value based on asset type
+    if asset_type.lower() == 'forex':
+        # Check if it's a JPY pair
+        if 'JPY' in pair_ticker.upper():
+            # JPY pairs: 0.01 = 1 pip (3 decimal places typically)
+            pips = price_diff / 0.01
+        else:
+            # Standard forex pairs: 0.0001 = 1 pip (5 decimal places)
+            pips = price_diff / 0.0001
+    
+    elif asset_type.lower() == 'gold' or pair_ticker.upper() == 'XAUUSD':
+        # Gold: 0.10 = 1 pip (2 decimal places)
+        pips = price_diff / 0.10
+    
+    elif asset_type.lower() == 'indices':
+        # Indices: typically 1.0 = 1 point/pip for NAS100, US30
+        if 'NAS100' in pair_ticker.upper() or 'US30' in pair_ticker.upper():
+            pips = price_diff / 1.0
+        else:
+            # For other indices, use 0.1 as default
+            pips = price_diff / 0.10
+    
+    else:
+        # Default fallback
+        pips = price_diff / 0.0001
+    
+    return round(pips, 2)
+
+def calculate_pip_value(asset_type: str, pair_ticker: str, lot_size: float) -> float:
+    """
+    Calculate the dollar value of 1 pip for the trade
+    
+    Standard Lot = 100,000 units
+    Mini Lot = 10,000 units  
+    Micro Lot = 1,000 units
+    
+    For most forex pairs: 1 pip = $10 per standard lot
+    For JPY pairs: 1 pip = ~$9.15 per standard lot (varies with USD/JPY rate)
+    For Gold: 1 pip = $10 per standard lot
+    For Indices: varies by instrument
+    """
+    # Convert lot size to units
+    units = lot_size * 100000  # Standard lot = 100,000 units
+    
+    if asset_type.lower() == 'forex':
+        if 'JPY' in pair_ticker.upper():
+            # JPY pairs: pip value varies, approximate
+            pip_value = (0.01 / 100) * units  # Simplified calculation
+        else:
+            # Standard forex pairs
+            pip_value = (0.0001 / 1) * units
+    
+    elif asset_type.lower() == 'gold' or pair_ticker.upper() == 'XAUUSD':
+        # Gold: 0.10 pip on 1 oz = $0.10, on standard lot (100 oz) = $10
+        pip_value = 0.10 * lot_size * 100
+    
+    elif asset_type.lower() == 'indices':
+        # Indices: typically $1 per contract per point
+        pip_value = 1.0 * lot_size * 100  # Simplified
+    
+    else:
+        pip_value = 10.0 * lot_size  # Default $10 per lot per pip
+    
+    return round(pip_value, 2)
+
+def calculate_trade_metrics(trade_data: dict) -> dict:
+    """
+    Calculate all trading metrics: R:R, risk, P&L, etc.
+    """
+    entry_price = trade_data['entry_price']
+    stop_loss = trade_data['stop_loss']
+    take_profit = trade_data['take_profit']
+    exit_price = trade_data.get('exit_price', None)
+    order_type = trade_data['order_type']
+    lot_size = trade_data['lot_size']
+    account_size = trade_data['account_size_at_entry']
+    asset_type = trade_data['asset_type']
+    pair_ticker = trade_data['pair_ticker']
+    
+    # Calculate risk in pips (distance from entry to SL)
+    risk_pips = abs(calculate_pips(asset_type, pair_ticker, entry_price, stop_loss, order_type))
+    
+    # Calculate potential reward in pips (distance from entry to TP)
+    reward_pips = abs(calculate_pips(asset_type, pair_ticker, entry_price, take_profit, order_type))
+    
+    # Calculate R:R ratio
+    risk_reward_ratio = round(reward_pips / risk_pips, 2) if risk_pips > 0 else 0
+    
+    # Calculate pip value
+    pip_value = calculate_pip_value(asset_type, pair_ticker, lot_size)
+    
+    # Calculate risk amount in USD
+    risk_amount_usd = round(risk_pips * pip_value, 2)
+    
+    # Calculate risk percentage
+    risk_percentage = round((risk_amount_usd / account_size) * 100, 2) if account_size > 0 else 0
+    
+    # Calculate P&L if trade is closed
+    profit_loss_pips = None
+    profit_loss_usd = None
+    result = None
+    
+    if exit_price:
+        # Calculate actual pips gained/lost
+        profit_loss_pips = calculate_pips(asset_type, pair_ticker, entry_price, exit_price, order_type)
+        
+        # Calculate P&L in USD
+        profit_loss_usd = round(profit_loss_pips * pip_value, 2)
+        
+        # Determine result
+        if profit_loss_pips > 0.5:  # Small buffer for breakeven
+            result = 'win'
+        elif profit_loss_pips < -0.5:
+            result = 'loss'
+        else:
+            result = 'breakeven'
+    
+    return {
+        'pips_gained': profit_loss_pips,
+        'risk_reward_ratio': risk_reward_ratio,
+        'risk_amount_usd': risk_amount_usd,
+        'risk_percentage': risk_percentage,
+        'profit_loss_usd': profit_loss_usd,
+        'profit_loss_pips': profit_loss_pips,
+        'result': result
+    }
+
+# ==================== END TRADING JOURNAL HELPERS ====================
+
+
             # Map common industries to sectors
             industry_sector_map = {
                 'software': 'Technology',
@@ -1050,6 +1254,86 @@ class Token(BaseModel):
 
 class LicenseRequest(BaseModel):
     license_key: str
+
+# --- Trading Journal Models ---
+class TradeCreate(BaseModel):
+    pair_ticker: str  # XAUUSD, NAS100, EURUSD
+    asset_type: str  # 'forex', 'gold', 'indices'
+    market_trend: Optional[str] = None
+    trading_session: Optional[str] = None
+    strategy: Optional[str] = None
+    order_type: str  # 'Buy', 'Sell'
+    lot_size: float
+    lot_type: Optional[str] = None
+    entry_price: float
+    stop_loss: float
+    take_profit: float
+    exit_price: Optional[float] = None
+    entry_time: datetime
+    exit_time: Optional[datetime] = None
+    account_size_at_entry: float
+    notes: Optional[str] = None
+
+class TradeUpdate(BaseModel):
+    exit_price: Optional[float] = None
+    exit_time: Optional[datetime] = None
+    notes: Optional[str] = None
+    market_trend: Optional[str] = None
+    trading_session: Optional[str] = None
+    strategy: Optional[str] = None
+
+class TradeResponse(BaseModel):
+    id: int
+    user_id: int
+    pair_ticker: str
+    asset_type: str
+    market_trend: Optional[str]
+    trading_session: Optional[str]
+    strategy: Optional[str]
+    order_type: str
+    lot_size: float
+    lot_type: Optional[str]
+    entry_price: float
+    stop_loss: float
+    take_profit: float
+    exit_price: Optional[float]
+    entry_time: datetime
+    exit_time: Optional[datetime]
+    pips_gained: Optional[float]
+    risk_reward_ratio: Optional[float]
+    risk_amount_usd: Optional[float]
+    risk_percentage: Optional[float]
+    profit_loss_usd: Optional[float]
+    profit_loss_pips: Optional[float]
+    account_size_at_entry: float
+    status: str
+    result: Optional[str]
+    notes: Optional[str]
+    ai_trade_score: Optional[int]
+    ai_review: Optional[str]
+    created_at: datetime
+    updated_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+class JournalStats(BaseModel):
+    total_trades: int
+    open_trades: int
+    closed_trades: int
+    wins: int
+    losses: int
+    breakeven: int
+    win_rate: float
+    total_pips: float
+    total_profit_usd: float
+    net_profit_usd: float
+    profit_factor: float
+    average_win_pips: float
+    average_loss_pips: float
+    largest_win_usd: float
+    largest_loss_usd: float
+    trades_remaining_free: int  # For 10-trade limit
 
 # --- Routes ---
 @app.post("/register")
@@ -4976,3 +5260,371 @@ async def get_all_articles_admin(
             for a in articles
         ]
     }
+
+
+# ==================== TRADING JOURNAL ENDPOINTS ====================
+
+@app.post("/journal/trades", response_model=TradeResponse)
+async def create_trade(
+    trade: TradeCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    📝 Create a new trade entry in the journal
+    """
+    try:
+        # Check 10-trade limit for free users
+        if not current_user.is_pro:
+            trade_count = db.query(TradingJournal).filter(
+                TradingJournal.user_id == current_user.id
+            ).count()
+            
+            if trade_count >= 10:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Free plan limited to 10 trades. Upgrade to PRO for unlimited trading journal access."
+                )
+        
+        # Calculate all metrics
+        trade_dict = trade.dict()
+        trade_dict['user_id'] = current_user.id
+        metrics = calculate_trade_metrics(trade_dict)
+        
+        # Determine lot type
+        lot_type = 'Standard' if trade.lot_size >= 1.0 else ('Mini' if trade.lot_size >= 0.1 else 'Micro')
+        
+        # Create trade record
+        new_trade = TradingJournal(
+            user_id=current_user.id,
+            pair_ticker=trade.pair_ticker,
+            asset_type=trade.asset_type,
+            market_trend=trade.market_trend,
+            trading_session=trade.trading_session,
+            strategy=trade.strategy,
+            order_type=trade.order_type,
+            lot_size=trade.lot_size,
+            lot_type=lot_type,
+            entry_price=trade.entry_price,
+            stop_loss=trade.stop_loss,
+            take_profit=trade.take_profit,
+            exit_price=trade.exit_price,
+            entry_time=trade.entry_time,
+            exit_time=trade.exit_time,
+            account_size_at_entry=trade.account_size_at_entry,
+            notes=trade.notes,
+            pips_gained=metrics['pips_gained'],
+            risk_reward_ratio=metrics['risk_reward_ratio'],
+            risk_amount_usd=metrics['risk_amount_usd'],
+            risk_percentage=metrics['risk_percentage'],
+            profit_loss_usd=metrics['profit_loss_usd'],
+            profit_loss_pips=metrics['profit_loss_pips'],
+            result=metrics['result'],
+            status='closed' if trade.exit_price else 'open'
+        )
+        
+        db.add(new_trade)
+        db.commit()
+        db.refresh(new_trade)
+        
+        return new_trade
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error creating trade: {str(e)}")
+
+
+@app.get("/journal/trades", response_model=list[TradeResponse])
+async def get_all_trades(
+    status: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    📊 Get all trades for the current user
+    Filter by status: 'open', 'closed', or None for all
+    """
+    query = db.query(TradingJournal).filter(
+        TradingJournal.user_id == current_user.id
+    )
+    
+    if status:
+        query = query.filter(TradingJournal.status == status)
+    
+    trades = query.order_by(TradingJournal.entry_time.desc()).limit(limit).offset(offset).all()
+    
+    return trades
+
+
+@app.get("/journal/trades/{trade_id}", response_model=TradeResponse)
+async def get_trade(
+    trade_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    📄 Get a specific trade by ID
+    """
+    trade = db.query(TradingJournal).filter(
+        TradingJournal.id == trade_id,
+        TradingJournal.user_id == current_user.id
+    ).first()
+    
+    if not trade:
+        raise HTTPException(status_code=404, detail="Trade not found")
+    
+    return trade
+
+
+@app.put("/journal/trades/{trade_id}", response_model=TradeResponse)
+async def update_trade(
+    trade_id: int,
+    trade_update: TradeUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    ✏️ Update a trade (close position, add notes, etc.)
+    """
+    trade = db.query(TradingJournal).filter(
+        TradingJournal.id == trade_id,
+        TradingJournal.user_id == current_user.id
+    ).first()
+    
+    if not trade:
+        raise HTTPException(status_code=404, detail="Trade not found")
+    
+    try:
+        # Update basic fields
+        if trade_update.notes is not None:
+            trade.notes = trade_update.notes
+        if trade_update.market_trend is not None:
+            trade.market_trend = trade_update.market_trend
+        if trade_update.trading_session is not None:
+            trade.trading_session = trade_update.trading_session
+        if trade_update.strategy is not None:
+            trade.strategy = trade_update.strategy
+        
+        # If closing the trade
+        if trade_update.exit_price is not None:
+            trade.exit_price = trade_update.exit_price
+            trade.exit_time = trade_update.exit_time or datetime.now(timezone.utc)
+            trade.status = 'closed'
+            
+            # Recalculate metrics
+            trade_dict = {
+                'pair_ticker': trade.pair_ticker,
+                'asset_type': trade.asset_type,
+                'order_type': trade.order_type,
+                'lot_size': trade.lot_size,
+                'entry_price': trade.entry_price,
+                'stop_loss': trade.stop_loss,
+                'take_profit': trade.take_profit,
+                'exit_price': trade.exit_price,
+                'account_size_at_entry': trade.account_size_at_entry
+            }
+            
+            metrics = calculate_trade_metrics(trade_dict)
+            
+            trade.pips_gained = metrics['pips_gained']
+            trade.profit_loss_usd = metrics['profit_loss_usd']
+            trade.profit_loss_pips = metrics['profit_loss_pips']
+            trade.result = metrics['result']
+        
+        db.commit()
+        db.refresh(trade)
+        
+        return trade
+    
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error updating trade: {str(e)}")
+
+
+@app.delete("/journal/trades/{trade_id}")
+async def delete_trade(
+    trade_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    🗑️ Delete a trade
+    """
+    trade = db.query(TradingJournal).filter(
+        TradingJournal.id == trade_id,
+        TradingJournal.user_id == current_user.id
+    ).first()
+    
+    if not trade:
+        raise HTTPException(status_code=404, detail="Trade not found")
+    
+    db.delete(trade)
+    db.commit()
+    
+    return {"success": True, "message": "Trade deleted successfully"}
+
+
+@app.get("/journal/stats", response_model=JournalStats)
+async def get_journal_stats(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    📈 Get comprehensive trading statistics
+    """
+    # Get all closed trades
+    closed_trades = db.query(TradingJournal).filter(
+        TradingJournal.user_id == current_user.id,
+        TradingJournal.status == 'closed'
+    ).all()
+    
+    # Get open trades count
+    open_count = db.query(TradingJournal).filter(
+        TradingJournal.user_id == current_user.id,
+        TradingJournal.status == 'open'
+    ).count()
+    
+    # Total trades
+    total_count = db.query(TradingJournal).filter(
+        TradingJournal.user_id == current_user.id
+    ).count()
+    
+    # Calculate stats
+    wins = [t for t in closed_trades if t.result == 'win']
+    losses = [t for t in closed_trades if t.result == 'loss']
+    breakeven = [t for t in closed_trades if t.result == 'breakeven']
+    
+    win_count = len(wins)
+    loss_count = len(losses)
+    breakeven_count = len(breakeven)
+    closed_count = len(closed_trades)
+    
+    win_rate = round((win_count / closed_count * 100), 2) if closed_count > 0 else 0
+    
+    # Total pips and profit
+    total_pips = sum(t.profit_loss_pips or 0 for t in closed_trades)
+    total_profit_usd = sum(t.profit_loss_usd or 0 for t in closed_trades)
+    
+    # Calculate profit factor (gross profit / gross loss)
+    gross_profit = sum(t.profit_loss_usd for t in wins)
+    gross_loss = abs(sum(t.profit_loss_usd for t in losses))
+    profit_factor = round(gross_profit / gross_loss, 2) if gross_loss > 0 else 0
+    
+    # Average wins/losses
+    avg_win_pips = round(sum(t.profit_loss_pips for t in wins) / win_count, 2) if win_count > 0 else 0
+    avg_loss_pips = round(sum(t.profit_loss_pips for t in losses) / loss_count, 2) if loss_count > 0 else 0
+    
+    # Largest win/loss
+    largest_win = max((t.profit_loss_usd for t in wins), default=0)
+    largest_loss = min((t.profit_loss_usd for t in losses), default=0)
+    
+    # Free tier: 10 trades limit
+    trades_remaining = max(10 - total_count, 0) if not current_user.is_pro else 999
+    
+    return JournalStats(
+        total_trades=total_count,
+        open_trades=open_count,
+        closed_trades=closed_count,
+        wins=win_count,
+        losses=loss_count,
+        breakeven=breakeven_count,
+        win_rate=win_rate,
+        total_pips=round(total_pips, 2),
+        total_profit_usd=round(total_profit_usd, 2),
+        net_profit_usd=round(total_profit_usd, 2),
+        profit_factor=profit_factor,
+        average_win_pips=avg_win_pips,
+        average_loss_pips=avg_loss_pips,
+        largest_win_usd=round(largest_win, 2),
+        largest_loss_usd=round(largest_loss, 2),
+        trades_remaining_free=trades_remaining
+    )
+
+
+@app.post("/journal/trades/{trade_id}/ai-review")
+async def get_ai_trade_review(
+    trade_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    🤖 Get AI review for a trade (PRO feature)
+    """
+    if not current_user.is_pro:
+        raise HTTPException(
+            status_code=403,
+            detail="AI Trade Review is a PRO feature. Upgrade to access AI-powered trade analysis."
+        )
+    
+    trade = db.query(TradingJournal).filter(
+        TradingJournal.id == trade_id,
+        TradingJournal.user_id == current_user.id
+    ).first()
+    
+    if not trade:
+        raise HTTPException(status_code=404, detail="Trade not found")
+    
+    # If already has AI review, return it
+    if trade.ai_trade_score and trade.ai_review:
+        return {
+            "score": trade.ai_trade_score,
+            "review": trade.ai_review
+        }
+    
+    # Generate AI review using Gemini
+    try:
+        prompt = f"""
+You are a professional trading mentor. Review this trade and provide constructive feedback.
+
+Trade Details:
+- Pair: {trade.pair_ticker}
+- Type: {trade.order_type}
+- Entry: {trade.entry_price}
+- SL: {trade.stop_loss}
+- TP: {trade.take_profit}
+- Exit: {trade.exit_price or 'Still Open'}
+- R:R: {trade.risk_reward_ratio}
+- Risk: {trade.risk_percentage}%
+- Result: {trade.result or 'Pending'}
+- Pips: {trade.profit_loss_pips or 'N/A'}
+- P&L: ${trade.profit_loss_usd or 'N/A'}
+- Strategy: {trade.strategy or 'Not specified'}
+- Session: {trade.trading_session or 'Not specified'}
+
+Provide:
+1. Trade Score (1-10)
+2. Brief review (2-3 sentences) covering risk management, entry quality, and lessons learned.
+
+Format as JSON:
+{{"score": <number>, "review": "<text>"}}
+"""
+        
+        response = await asyncio.to_thread(
+            lambda: client.models.generate_content(
+                model='gemini-2.0-flash',
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    temperature=0.5
+                )
+            )
+        )
+        
+        ai_response = json.loads(response.text)
+        
+        # Save to database
+        trade.ai_trade_score = ai_response['score']
+        trade.ai_review = ai_response['review']
+        db.commit()
+        
+        return ai_response
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI review failed: {str(e)}")
+
+
+# ==================== END TRADING JOURNAL ENDPOINTS ====================
