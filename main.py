@@ -5166,9 +5166,6 @@ async def create_trade(
         trade_dict['user_id'] = current_user.id
         metrics = calculate_trade_metrics(trade_dict)
         
-        # Determine lot type
-        lot_type = 'Standard' if trade.lot_size >= 1.0 else ('Mini' if trade.lot_size >= 0.1 else 'Micro')
-        
         # Create trade record
         new_trade = TradingJournal(
             user_id=current_user.id,
@@ -5187,10 +5184,7 @@ async def create_trade(
             exit_time=trade.exit_time,
             account_size_at_entry=trade.account_size_at_entry,
             notes=trade.notes,
-            pips_gained=metrics['pips_gained'],
             risk_reward_ratio=metrics['risk_reward_ratio'],
-            risk_amount_usd=metrics['risk_amount_usd'],
-            risk_percentage=metrics['risk_percentage'],
             profit_loss_usd=metrics['profit_loss_usd'],
             profit_loss_pips=metrics['profit_loss_pips'],
             result=metrics['result'],
