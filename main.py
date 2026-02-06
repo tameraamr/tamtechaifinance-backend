@@ -216,6 +216,7 @@ class TradingJournal(Base):
     risk_reward_ratio = Column(Float)  # R:R ratio
     profit_loss_usd = Column(Float)  # P&L in dollars
     profit_loss_pips = Column(Float)  # P&L in pips
+    account_size_at_entry = Column(Float)  # Account size when trade opened
     
     # Trade Outcome
     status = Column(String, default='open')  # 'open', 'closed'
@@ -1274,6 +1275,7 @@ class TradeCreate(BaseModel):
     exit_price: Optional[float] = None
     entry_time: datetime
     exit_time: Optional[datetime] = None
+    account_size_at_entry: Optional[float] = None
     notes: Optional[str] = None
 
 class TradeUpdate(BaseModel):
@@ -1303,6 +1305,7 @@ class TradeResponse(BaseModel):
     risk_reward_ratio: Optional[float]
     profit_loss_usd: Optional[float]
     profit_loss_pips: Optional[float]
+    account_size_at_entry: Optional[float]
     status: str
     result: Optional[str]
     notes: Optional[str]
@@ -5308,7 +5311,7 @@ async def update_trade(
             
             metrics = calculate_trade_metrics(trade_dict)
             
-            trade.pips_gained = metrics['pips_gained']
+            # Update only existing fields
             trade.profit_loss_usd = metrics['profit_loss_usd']
             trade.profit_loss_pips = metrics['profit_loss_pips']
             trade.result = metrics['result']
