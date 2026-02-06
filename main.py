@@ -777,8 +777,6 @@ def batch_fetch_market_data(tickers: list, asset_types: dict = None):
 
     for i in range(0, len(tickers), chunk_size):
         chunk = tickers[i:i + chunk_size]
-        print(f"📊 Fetching batch {i//chunk_size + 1}/{(len(tickers) + chunk_size - 1)//chunk_size}: {chunk}")
-
         # Fetch data for this chunk
         for ticker in chunk:
             try:
@@ -799,7 +797,6 @@ def batch_fetch_market_data(tickers: list, asset_types: dict = None):
                     current_price = info.get('currentPrice') or info.get('regularMarketPrice')
 
                 if not current_price or current_price <= 0:
-                    print(f"⚠️ No valid price for {ticker}, skipping")
                     continue
 
                 # Get change percentage
@@ -831,8 +828,6 @@ def batch_fetch_market_data(tickers: list, asset_types: dict = None):
                     'asset_type': asset_type,
                     'success': True
                 }
-
-                print(f"✅ {ticker}: ${current_price:.2f} ({change_percent:+.2f}%) - {sector}")
 
             except Exception as e:
                 print(f"❌ Failed to fetch {ticker}: {e}")
