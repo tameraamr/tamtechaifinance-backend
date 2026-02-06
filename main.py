@@ -2867,67 +2867,7 @@ async def verify_license(request: LicenseRequest, db: Session = Depends(get_db),
         return {"valid": False, "message": "Invalid license key or already used."}
     except Exception as e: 
         return {"valid": False, "message": "Connection error with verification server"}
-    
-@app.get("/market-winners-losers")
-def get_market_winners_losers(db: Session = Depends(get_db)):
-    """
-    📈 GET DAILY MARKET WINNERS & LOSERS (PREMIUM FEATURE)
-    Returns top 10 gainers and losers from major indices
-    """
-    try:
-        # Use the same cached data as the heatmap
-        # db is now injected by FastAPI
-        # Get the universe of tickers from the heatmap logic
-        master_universe = {
-            "stocks": [
-                "SPY", "QQQ", "IWM", "VTI", "VXUS", "BND", "VEA", "VWO", "VIG", "VUG",
-                "AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "META", "NFLX", "AMD", "INTC",
-                "JPM", "BAC", "WFC", "GS", "MS", "V", "MA", "PYPL", "COIN",
-                "XOM", "CVX", "COP", "EOG", "MPC", "PSX", "VLO", "OXY",
-                "JNJ", "PFE", "MRK", "ABBV", "BMY", "LLY", "TMO", "DHR", "ABT", "AMGN",
-                "WMT", "COST", "HD", "LOW", "TGT", "DG", "DLTR", "KR", "CVS"
-            ],
-            "crypto": [
-                "BTC-USD", "ETH-USD", "BNB-USD", "ADA-USD", "SOL-USD", "DOT-USD", "DOGE-USD", "AVAX-USD", "LTC-USD", "XRP-USD",
-                "LINK-USD", "ALGO-USD", "VET-USD", "ICP-USD", "FIL-USD", "TRX-USD", "ETC-USD", "XLM-USD", "THETA-USD", "HBAR-USD"
-            ],
-            "commodities": [
-                "GC=F", "SI=F", "CL=F", "NG=F", "HG=F", "PL=F", "PA=F", "ALI=F", "ZC=F", "ZW=F",
-                "ZS=F", "ZM=F", "ZL=F", "ZO=F", "ZR=F", "KE=F", "CC=F", "KC=F", "CT=F", "SB=F"
-            ],
-            "forex": [
-                "EURUSD=X", "GBPUSD=X", "USDJPY=X", "AUDUSD=X", "USDCAD=X", "USDCHF=X", "NZDUSD=X", "EURJPY=X", "GBPJPY=X", "AUDJPY=X",
-                "EURGBP=X", "EURAUD=X", "GBPAUD=X", "AUDNZD=X", "USDSGD=X", "USDHKD=X", "USDNOK=X", "USDSEK=X", "USDMXN=X", "USDBRL=X"
-            ]
-        }
-        all_tickers = []
-        for tickers in master_universe.values():
-            all_tickers.extend(tickers)
-        cached_data = get_cached_market_data(all_tickers, db)
-        performance_data = []
-        for ticker, data in cached_data.items():
-            change_percent = data.get('change_percent')
-            if change_percent is not None:
-                performance_data.append({
-                    "ticker": ticker,
-                    "name": data.get("name", ticker),
-                    "price": data.get("price", 0),
-                    "change_percent": change_percent,
-                    "volume": data.get('volume', 0),
-                    "market_cap": data.get("market_cap", 0),
-                    "sector": data.get("sector", "")
-                })
-        winners = sorted(performance_data, key=lambda x: x["change_percent"], reverse=True)[:10]
-        losers = sorted(performance_data, key=lambda x: x["change_percent"])[:10]
-        return {
-            "winners": winners,
-            "losers": losers,
-            "timestamp": datetime.now(timezone.utc).isoformat()
-        }
-        
-    except Exception as e:
-        print(f"Error in winners/losers: {e}")
-        return {"winners": [], "losers": [], "error": str(e)}
+# Removed /market-winners-losers endpoint - feature deprecated
 
 # --- Dynamic OG Image Generation for Social Sharing ---
 @app.get("/og/{ticker}")
@@ -3329,62 +3269,7 @@ async def analyze_compare(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/market-sentiment")
-async def get_market_sentiment(background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    """
-    🚀 CACHE-FIRST: Returns sentiment from cache only (no API calls)
-    Used by navbar - must be instant
-    """
-    try:
-        # Get SPY data from cache with background update if needed
-        cached_data = get_cached_market_data_with_background_update(["SPY"], db, background_tasks)
-
-        if "SPY" not in cached_data or cached_data["SPY"].get('price', 0) <= 0:
-            print("Sentiment: SPY not in cache or invalid price, returning neutral")
-            return {"sentiment": "Neutral", "score": 50}
-
-        # Use cached data for instant response
-        change_percent = cached_data["SPY"].get('change_percent', 0)
-        print(f"Sentiment: SPY change_percent = {change_percent}")
-
-        # Fear & Greed score based on SPY change
-        # Map change_percent to 0-100 scale
-        if change_percent >= 5:
-            score = 100  # Extreme Greed
-        elif change_percent >= 2:
-            score = 75   # Greed
-        elif change_percent >= 0.5:
-            score = 60   # Optimism
-        elif change_percent >= -0.5:
-            score = 50   # Neutral
-        elif change_percent >= -2:
-            score = 40   # Caution
-        elif change_percent >= -5:
-            score = 25   # Fear
-        else:
-            score = 0    # Extreme Fear
-
-        # Label based on score
-        if score >= 75:
-            sentiment_label = "Greed"
-        elif score >= 60:
-            sentiment_label = "Optimism"
-        elif score >= 40:
-            sentiment_label = "Neutral"
-        elif score >= 25:
-            sentiment_label = "Caution"
-        else:
-            sentiment_label = "Fear"
-
-        print(f"Sentiment: calculated score = {score}")
-        return {
-            "sentiment": sentiment_label,
-            "score": score
-        }
-    except Exception as e:
-        print(f"Sentiment Error: {e}")
-        return {"sentiment": "Neutral", "score": 50}
-
+# Removed /market-sentiment endpoint - feature deprecated
 
 @app.get("/market-sectors")
 async def get_market_sectors(background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
