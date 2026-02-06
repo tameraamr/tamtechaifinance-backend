@@ -224,8 +224,6 @@ class TradingJournal(Base):
     
     # Notes
     notes = Column(Text)  # User's trade notes
-    ai_trade_score = Column(Integer)  # Gemini AI score (1-10) for PRO users
-    ai_review = Column(Text)  # AI feedback on the trade
     
     # Metadata
     created_at = Column(DateTime, default=func.now(), index=True)
