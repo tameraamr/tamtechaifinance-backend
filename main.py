@@ -5446,4 +5446,104 @@ async def get_ai_trade_review(
     raise HTTPException(status_code=501, detail="AI Trade Review feature is currently unavailable")
 
 
+@app.get("/journal/public-stats/{user_id}")
+async def get_public_journal_stats(
+    user_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    📊 Get public trading statistics for a user (no authentication required)
+    Returns aggregated stats only, no individual trade details
+    """
+    # Check if user exists
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Get all closed trades for this user
+    closed_trades = db.query(TradingJournal).filter(
+        TradingJournal.user_id == user_id,
+        TradingJournal.status == 'closed'
+    ).all()
+    
+    if not closed_trades:
+        raise HTTPException(status_code=404, detail="No trading data available")
+    
+    # Calculate stats
+    wins = [t for t in closed_trades if t.result == 'win']
+    losses = [t for t in closed_trades if t.result == 'loss']
+    
+    win_count = len(wins)
+    loss_count = len(losses)
+    total_closed = len(closed_trades)
+    
+    win_rate = round((win_count / total_closed * 100), 2) if total_closed > 0 else 0
+    
+    # Total P&L
+    total_profit_usd = sum(t.profit_loss_usd or 0 for t in closed_trades)
+    
+    # Profit factor
+    gross_profit = sum(t.profit_loss_usd for t in wins)
+    gross_loss = abs(sum(t.profit_loss_usd for t in losses))
+    profit_factor = round(gross_profit / gross_loss, 2) if gross_loss > 0 else 0
+    
+    # Best session analysis
+    session_stats = {}
+    for trade in closed_trades:
+        if trade.trading_session:
+            if trade.trading_session not in session_stats:
+                session_stats[trade.trading_session] = {'wins': 0, 'total': 0}
+            session_stats[trade.trading_session]['total'] += 1
+            if trade.result == 'win':
+                session_stats[trade.trading_session]['wins'] += 1
+    
+    best_session = 'N/A'
+    best_session_win_rate = 0
+    for session, stats in session_stats.items():
+        wr = (stats['wins'] / stats['total'] * 100) if stats['total'] > 0 else 0
+        if wr > best_session_win_rate:
+            best_session = session
+            best_session_win_rate = wr
+    
+    # Best asset type
+    asset_stats = {}
+    for trade in closed_trades:
+        if trade.asset_type:
+            if trade.asset_type not in asset_stats:
+                asset_stats[trade.asset_type] = {'profit': 0, 'count': 0}
+            asset_stats[trade.asset_type]['count'] += 1
+            asset_stats[trade.asset_type]['profit'] += (trade.profit_loss_usd or 0)
+    
+    best_asset_type = 'N/A'
+    best_asset_profit = -999999
+    for asset, stats in asset_stats.items():
+        if stats['profit'] > best_asset_profit:
+            best_asset_type = asset
+            best_asset_profit = stats['profit']
+    
+    # First trade date
+    first_trade = db.query(TradingJournal).filter(
+        TradingJournal.user_id == user_id
+    ).order_by(TradingJournal.entry_time.asc()).first()
+    
+    trading_since = first_trade.entry_time.isoformat() if first_trade else datetime.now(timezone.utc).isoformat()
+    
+    # Get username (email prefix)
+    username = user.email.split('@')[0] if user.email else f"User{user_id}"
+    
+    return {
+        "username": username,
+        "total_trades": total_closed,
+        "win_rate": win_rate,
+        "profit_factor": profit_factor,
+        "total_profit_loss": round(total_profit_usd, 2),
+        "best_session": best_session,
+        "best_session_win_rate": round(best_session_win_rate, 2),
+        "trading_since": trading_since,
+        "total_wins": win_count,
+        "total_losses": loss_count,
+        "best_asset_type": best_asset_type
+    }
+
+
 # ==================== END TRADING JOURNAL ENDPOINTS ====================
