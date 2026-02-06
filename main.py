@@ -1586,6 +1586,7 @@ def login(response: Response, form_data: OAuth2PasswordRequestForm = Depends(), 
 @app.get("/users/me")
 def read_users_me(current_user: User = Depends(get_current_user_mandatory)):
     return {
+        "id": current_user.id,
         "email": current_user.email,
         "first_name": current_user.first_name,
         "last_name": current_user.last_name,
