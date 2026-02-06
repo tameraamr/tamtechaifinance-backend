@@ -773,7 +773,7 @@ def batch_fetch_market_data(tickers: list, asset_types: dict = None):
         return {}
 
     results = {}
-    chunk_size = 10  # Process in chunks to avoid rate limits
+    chunk_size = 5  # Reduced to avoid rate limits
 
     for i in range(0, len(tickers), chunk_size):
         chunk = tickers[i:i + chunk_size]
@@ -842,11 +842,15 @@ def batch_fetch_market_data(tickers: list, asset_types: dict = None):
                     'asset_type': asset_types.get(ticker, 'stock') if asset_types else 'stock',
                     'success': False
                 }
+            
+            # Small delay between individual tickers
+            import time
+            time.sleep(0.3)
 
-        # Small delay between chunks to be respectful to Yahoo Finance
+        # Delay between chunks to avoid rate limits
         if i + chunk_size < len(tickers):
             import time
-            time.sleep(0.5)
+            time.sleep(3.0)
 
     print(f"📊 Batch fetch completed: {len(results)}/{len(tickers)} tickers processed")
     return results
