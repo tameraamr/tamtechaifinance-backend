@@ -5179,7 +5179,6 @@ async def create_trade(
             strategy=trade.strategy,
             order_type=trade.order_type,
             lot_size=trade.lot_size,
-            lot_type=lot_type,
             entry_price=trade.entry_price,
             stop_loss=trade.stop_loss,
             take_profit=trade.take_profit,
