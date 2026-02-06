@@ -1272,12 +1272,20 @@ class TradeCreate(BaseModel):
     notes: Optional[str] = None
 
 class TradeUpdate(BaseModel):
+    pair_ticker: Optional[str] = None
+    asset_type: Optional[str] = None
+    order_type: Optional[str] = None
+    lot_size: Optional[float] = None
+    entry_price: Optional[float] = None
+    stop_loss: Optional[float] = None
+    take_profit: Optional[float] = None
     exit_price: Optional[float] = None
     exit_time: Optional[datetime] = None
     notes: Optional[str] = None
     market_trend: Optional[str] = None
     trading_session: Optional[str] = None
     strategy: Optional[str] = None
+    account_size_at_entry: Optional[float] = None
 
 class TradeResponse(BaseModel):
     id: int
@@ -5267,7 +5275,21 @@ async def update_trade(
         raise HTTPException(status_code=404, detail="Trade not found")
     
     try:
-        # Update basic fields
+        # Update all basic fields
+        if trade_update.pair_ticker is not None:
+            trade.pair_ticker = trade_update.pair_ticker
+        if trade_update.asset_type is not None:
+            trade.asset_type = trade_update.asset_type
+        if trade_update.order_type is not None:
+            trade.order_type = trade_update.order_type
+        if trade_update.lot_size is not None:
+            trade.lot_size = trade_update.lot_size
+        if trade_update.entry_price is not None:
+            trade.entry_price = trade_update.entry_price
+        if trade_update.stop_loss is not None:
+            trade.stop_loss = trade_update.stop_loss
+        if trade_update.take_profit is not None:
+            trade.take_profit = trade_update.take_profit
         if trade_update.notes is not None:
             trade.notes = trade_update.notes
         if trade_update.market_trend is not None:
@@ -5276,14 +5298,17 @@ async def update_trade(
             trade.trading_session = trade_update.trading_session
         if trade_update.strategy is not None:
             trade.strategy = trade_update.strategy
+        if trade_update.account_size_at_entry is not None:
+            trade.account_size_at_entry = trade_update.account_size_at_entry
         
-        # If closing the trade
+        # If closing the trade or exit price changed
         if trade_update.exit_price is not None:
             trade.exit_price = trade_update.exit_price
             trade.exit_time = trade_update.exit_time or datetime.now(timezone.utc)
             trade.status = 'closed'
-            
-            # Recalculate metrics
+        
+        # Always recalculate metrics if we have exit price
+        if trade.exit_price is not None:
             trade_dict = {
                 'pair_ticker': trade.pair_ticker,
                 'asset_type': trade.asset_type,
@@ -5301,6 +5326,7 @@ async def update_trade(
             # Update only existing fields
             trade.profit_loss_usd = metrics['profit_loss_usd']
             trade.profit_loss_pips = metrics['profit_loss_pips']
+            trade.risk_reward_ratio = metrics['risk_reward_ratio']
             trade.result = metrics['result']
         
         db.commit()
