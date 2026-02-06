@@ -5449,63 +5449,8 @@ async def get_ai_trade_review(
     if not trade:
         raise HTTPException(status_code=404, detail="Trade not found")
     
-    # If already has AI review, return it
-    if trade.ai_trade_score and trade.ai_review:
-        return {
-            "score": trade.ai_trade_score,
-            "review": trade.ai_review
-        }
-    
-    # Generate AI review using Gemini
-    try:
-        prompt = f"""
-You are a professional trading mentor. Review this trade and provide constructive feedback.
-
-Trade Details:
-- Pair: {trade.pair_ticker}
-- Type: {trade.order_type}
-- Entry: {trade.entry_price}
-- SL: {trade.stop_loss}
-- TP: {trade.take_profit}
-- Exit: {trade.exit_price or 'Still Open'}
-- R:R: {trade.risk_reward_ratio}
-- Risk: {trade.risk_percentage}%
-- Result: {trade.result or 'Pending'}
-- Pips: {trade.profit_loss_pips or 'N/A'}
-- P&L: ${trade.profit_loss_usd or 'N/A'}
-- Strategy: {trade.strategy or 'Not specified'}
-- Session: {trade.trading_session or 'Not specified'}
-
-Provide:
-1. Trade Score (1-10)
-2. Brief review (2-3 sentences) covering risk management, entry quality, and lessons learned.
-
-Format as JSON:
-{{"score": <number>, "review": "<text>"}}
-"""
-        
-        response = await asyncio.to_thread(
-            lambda: client.models.generate_content(
-                model='gemini-2.0-flash',
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    temperature=0.5
-                )
-            )
-        )
-        
-        ai_response = json.loads(response.text)
-        
-        # Save to database
-        trade.ai_trade_score = ai_response['score']
-        trade.ai_review = ai_response['review']
-        db.commit()
-        
-        return ai_response
-    
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"AI review failed: {str(e)}")
+    # AI review feature removed - columns ai_trade_score and ai_review no longer exist
+    raise HTTPException(status_code=501, detail="AI Trade Review feature is currently unavailable")
 
 
 # ==================== END TRADING JOURNAL ENDPOINTS ====================
