@@ -225,10 +225,6 @@ class TradingJournal(Base):
     # Notes
     notes = Column(Text)  # User's trade notes
     
-    # Metadata
-    created_at = Column(DateTime, default=func.now(), index=True)
-    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
-    
     __table_args__ = (
         Index('idx_trading_journal_user_date', 'user_id', 'entry_time'),
         Index('idx_trading_journal_user_status', 'user_id', 'status'),
