@@ -2641,33 +2641,22 @@ async def analyze_stock(
                     raise HTTPException(status_code=500, detail=f"{user_message} Your credit has been refunded.")
         
         # ========== STEP 4: LIVE PRICE INJECTION ==========
-        # If using cached AI report, only fetch live price (not full metrics/chart)
-        # If generating new AI report, financial_data_for_ai already has everything
+        # FIXED: Always fetch FULL fresh data (price, metrics, chart, news) even for cached AI reports
+        # This ensures users always see current price, updated metrics, and fresh chart data
         
         if cache_hit:
-            # Cache hit: Fetch ONLY live price (10-min cache), use metrics/chart from cached report
-            print(f"💹 Fetching LIVE price for cached report")
-            live_price_data = await get_live_price_and_news(ticker, db=db, use_cache=True)
+            # Cache hit: Fetch FULL fresh financial data (not just price)
+            print(f"💹 Fetching FULL fresh data for cached AI report (price, metrics, chart, news)")
+            live_financial_data = await get_real_financial_data(ticker, db=db, use_cache=True)
             
-            if not live_price_data or not live_price_data.get('price'):
-                # Fallback to cached price from AI report
-                print(f"⚠️ Live price fetch failed, using price from cached analysis")
+            if not live_financial_data or not live_financial_data.get('price'):
+                # Fallback to cached data from AI report
+                print(f"⚠️ Live data fetch failed, using data from cached analysis")
                 live_financial_data = {
                     "symbol": ticker.upper(),
                     "price": analysis_json.get("current_price", 0),
                     "companyName": analysis_json.get("company_name", ticker),
                     "currency": "USD",
-                    # Use ALL metrics and chart from cached AI report (7 days old)
-                    **{k: v for k, v in analysis_json.items() if k not in ["symbol", "price", "companyName", "currency"]}
-                }
-            else:
-                # Merge live price with cached analysis data
-                live_financial_data = {
-                    "symbol": ticker.upper(),
-                    "price": live_price_data["price"],
-                    "companyName": live_price_data["companyName"],
-                    "currency": live_price_data.get("currency", "USD"),
-                    # All metrics and chart from cached AI report (unchanged)
                     "chart_data": analysis_json.get("chart_data", []),
                     "pe_ratio": analysis_json.get("pe_ratio"),
                     "forward_pe": analysis_json.get("forward_pe"),
@@ -2688,6 +2677,7 @@ async def analyze_stock(
                     "fiftyTwoWeekLow": analysis_json.get("fiftyTwoWeekLow"),
                     "targetMeanPrice": analysis_json.get("targetMeanPrice", "N/A"),
                     "recommendationKey": analysis_json.get("recommendationKey", "none"),
+                    "recent_news": analysis_json.get("recent_news", [])
                 }
         else:
             # New AI report: Use the full financial data we already fetched for AI
