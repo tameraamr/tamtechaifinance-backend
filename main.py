@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, status, Request, Response, Cookie, Form, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Depends, status, Request, Response, Cookie, Form, File, UploadFile, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel, EmailStr, Field, field_validator
@@ -25,8 +25,7 @@ from collections import deque, defaultdict
 from jose import JWTError, jwt
 import bcrypt
 import re
-import secrets
-from mailer import send_verification_email
+import base64
 
 # --- Helper function for datetime handling ---
 def make_datetime_aware(dt):
@@ -224,6 +223,11 @@ class TradingJournal(Base):
     
     # Notes
     notes = Column(Text)  # User's trade notes
+    
+    # Enhanced Features
+    tags = Column(String)  # Comma-separated tags
+    checklist = Column(Text)  # JSON string of checklist items
+    image_url = Column(String)  # URL to trade screenshot/image
     
     __table_args__ = (
         Index('idx_trading_journal_user_date', 'user_id', 'entry_time'),
@@ -1270,6 +1274,9 @@ class TradeCreate(BaseModel):
     exit_time: Optional[datetime] = None
     account_size_at_entry: Optional[float] = None
     notes: Optional[str] = None
+    tags: Optional[str] = None  # Comma-separated tags
+    checklist: Optional[str] = None  # JSON string of checklist items
+    image_url: Optional[str] = None  # URL to trade screenshot/image
 
 class TradeUpdate(BaseModel):
     pair_ticker: Optional[str] = None
@@ -1286,6 +1293,9 @@ class TradeUpdate(BaseModel):
     trading_session: Optional[str] = None
     strategy: Optional[str] = None
     account_size_at_entry: Optional[float] = None
+    tags: Optional[str] = None
+    checklist: Optional[str] = None
+    image_url: Optional[str] = None
 
 class TradeResponse(BaseModel):
     id: int
@@ -1310,6 +1320,9 @@ class TradeResponse(BaseModel):
     status: str
     result: Optional[str]
     notes: Optional[str]
+    tags: Optional[str]
+    checklist: Optional[str]
+    image_url: Optional[str]
     
     class Config:
         from_attributes = True
@@ -5182,6 +5195,9 @@ async def create_trade(
             exit_time=trade.exit_time,
             account_size_at_entry=trade.account_size_at_entry,
             notes=trade.notes,
+            tags=trade.tags,
+            checklist=trade.checklist,
+            image_url=trade.image_url,
             risk_reward_ratio=metrics['risk_reward_ratio'],
             profit_loss_usd=metrics['profit_loss_usd'],
             profit_loss_pips=metrics['profit_loss_pips'],
@@ -5290,6 +5306,12 @@ async def update_trade(
             trade.strategy = trade_update.strategy
         if trade_update.account_size_at_entry is not None:
             trade.account_size_at_entry = trade_update.account_size_at_entry
+        if trade_update.tags is not None:
+            trade.tags = trade_update.tags
+        if trade_update.checklist is not None:
+            trade.checklist = trade_update.checklist
+        if trade_update.image_url is not None:
+            trade.image_url = trade_update.image_url
         
         # If closing the trade or exit price changed
         if trade_update.exit_price is not None:
@@ -5554,6 +5576,61 @@ async def get_public_journal_stats(
         "total_losses": loss_count,
         "best_asset_type": best_asset_type
     }
+
+
+@app.post("/journal/upload-image")
+async def upload_trade_image(
+    request: Request,
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user_mandatory)
+):
+    """
+    📸 Upload an image and store as base64 in database
+    Used for trade screenshots in the trading journal
+    """
+    print(f"DEBUG: Received file upload, filename: {file.filename}, content_type: {file.content_type}")
+    
+    # Read file content
+    file_content = await file.read()
+    print(f"DEBUG: File size: {len(file_content)}")
+    
+    if not file_content:
+        raise HTTPException(status_code=400, detail="No file provided")
+    
+    # Check file size (limit to 5MB for base64 storage)
+    if len(file_content) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File too large (max 5MB)")
+    
+    # Check if it's an image
+    try:
+        from PIL import Image
+        import io
+        
+        # Try to open as image to validate
+        image = Image.open(io.BytesIO(file_content))
+        image.verify()  # Verify it's a valid image
+        
+        # Get image format
+        format = image.format.lower() if image.format else 'png'
+        
+    except Exception as e:
+        print(f"DEBUG: Image validation failed: {e}")
+        raise HTTPException(status_code=400, detail="Invalid image file")
+    
+    try:
+        # Convert to base64
+        base64_data = base64.b64encode(file_content).decode('utf-8')
+        data_url = f"data:image/{format};base64,{base64_data}"
+        
+        return {
+            "success": True,
+            "image_url": data_url,
+            "file_size": len(file_content)
+        }
+            
+    except Exception as e:
+        print(f"DEBUG: Base64 conversion failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Image processing failed: {str(e)}")
 
 
 # ==================== END TRADING JOURNAL ENDPOINTS ====================
