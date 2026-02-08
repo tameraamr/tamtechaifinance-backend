@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from typing import Optional
-from google import genai
+import google.genai as genai
 from google.genai import types
 import yfinance as yf
 import os
