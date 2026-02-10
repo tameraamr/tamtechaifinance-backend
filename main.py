@@ -27,6 +27,8 @@ from jose import JWTError, jwt
 import bcrypt
 import re
 import base64
+from mailer import send_verification_email, send_contact_email
+
 
 # --- Helper function for datetime handling ---
 def make_datetime_aware(dt):
