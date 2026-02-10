@@ -21,6 +21,7 @@ from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from datetime import timezone, UTC
 import uuid
+import secrets  # For secure token generation in email verification
 from collections import deque, defaultdict
 from jose import JWTError, jwt
 import bcrypt
@@ -4727,8 +4728,8 @@ Your task is to produce an **EXHAUSTIVE, INSTITUTIONAL-GRADE INVESTMENT MEMO** f
                 print(f"  ✅ {ticker} refreshed successfully")
                 
                 # Small delay to avoid rate limits
-                # Free tier: ~15 RPM, so wait 5 seconds between calls
-                await asyncio.sleep(5)
+                # Free tier: ~15 RPM, so wait 10 seconds between calls (increased from 5 to avoid 429 errors)
+                await asyncio.sleep(10)
                 
             except Exception as e:
                 gemini_circuit_breaker.record_failure()
@@ -4751,7 +4752,7 @@ Your task is to produce an **EXHAUSTIVE, INSTITUTIONAL-GRADE INVESTMENT MEMO** f
         "message": f"Refresh started in background ({'FORCE MODE - all tickers' if force else 'only stale tickers'})",
         "total_tickers": total_tickers,
         "stale_reports": stale_count if not force else total_tickers,
-        "estimated_time": f"{total_tickers * 5 / 60:.0f} minutes" if force else f"{stale_count * 5 / 60:.0f} minutes",
+        "estimated_time": f"{total_tickers * 10 / 60:.0f} minutes" if force else f"{stale_count * 10 / 60:.0f} minutes",
         "estimated_cost": f"${total_tickers * 0.002:.2f}",
         "status": "Check server logs for progress"
     }
