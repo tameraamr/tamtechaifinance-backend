@@ -898,6 +898,38 @@ def update_market_cache(tickers_data: dict, db: Session):
         print(f"❌ Error committing cache updates: {e}")
         db.rollback()
 
+def get_cached_market_data(tickers: list, db: Session, include_expired: bool = False):
+    """
+    Fetch cached market data for given tickers
+    If tickers list is empty, returns all cached data (useful for fallback)
+    """
+    try:
+        if not tickers:
+            query = db.query(MarketDataCache)
+        else:
+            query = db.query(MarketDataCache).filter(MarketDataCache.ticker.in_(tickers))
+            
+        cached_items = query.all()
+        result = {}
+        
+        for item in cached_items:
+            result[item.ticker] = {
+                "price": item.price,
+                "change_percent": item.change_percent,
+                "volume": item.volume,
+                "market_cap": item.market_cap,
+                "sector": item.sector,
+                "asset_type": item.asset_type,
+                "last_updated": item.last_updated
+            }
+            
+        return result
+    except Exception as e:
+        print(f"⚠️ Error reading cache: {e}")
+        return {}
+
+
+
 def get_market_data_with_cache(tickers: list, asset_types: dict = None, db: Session = None, force_fresh: bool = False, stale_while_revalidate: bool = False) -> dict:
     """
     Main function: Get market data with intelligent caching.
@@ -3726,13 +3758,16 @@ async def get_master_universe_heatmap(background_tasks: BackgroundTasks, db: Ses
             for ticker in all_tickers:
                 if ticker in cached_data:
                     last_updated = cached_data[ticker].get('last_updated')
+                    
+                    # Ensure last_updated is offset-aware for comparison
+                    if last_updated and last_updated.tzinfo is None:
+                        last_updated = last_updated.replace(tzinfo=timezone.utc)
+                        
                     if not last_updated or (current_time - last_updated).total_seconds() >= 600:  # 10 minutes
                         needs_background_update = True
                         break
 
         # 🔥 BACKGROUND UPDATE: Trigger only AFTER determining response data
-        if needs_background_update:
-            background_tasks.add_task(update_heatmap_cache_background, all_tickers, asset_types)
         if needs_background_update:
             background_tasks.add_task(update_heatmap_cache_background, all_tickers, asset_types)
 
