@@ -5031,6 +5031,10 @@ Your task is to produce an **EXHAUSTIVE, INSTITUTIONAL-GRADE INVESTMENT MEMO** f
                 print(f"  ✗ {ticker} failed: {e}")
                 failed += 1
                 db_session.rollback()
+                
+                # 🛑 ERROR BACKOFF: If we failed, wait longer (30s) to let API recover
+                print(f"  ⚠️ Error encountered. Waiting 30s to cool down...")
+                await asyncio.sleep(30)
                 continue
         
         print(f"\n🎉 FAMOUS TICKERS SYNC COMPLETE")
