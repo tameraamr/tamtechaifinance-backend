@@ -4857,52 +4857,56 @@ async def refresh_famous_tickers(
         print(f"🚀 STARTING FAMOUS TICKER REFRESH: {len(ticker_list)} tickers")
         
         for i, ticker in enumerate(ticker_list):
-            try:
-                print(f"⭐ Refreshing Famous Ticker: {ticker} ({i+1}/{len(ticker_list)})")
-                
-                # Check if already fresh (less than 7 days old) - unless force=true
-                cached = db_session.query(AnalysisReport).filter(
-                    AnalysisReport.ticker == ticker,
-                    AnalysisReport.language == "en"
-                ).order_by(AnalysisReport.updated_at.desc()).first()
-                
-                if cached and not force_refresh:
-                    cache_age = datetime.now(timezone.utc) - make_datetime_aware(cached.updated_at)
-                    if cache_age < timedelta(days=7):
-                        print(f"  ✓ {ticker} already fresh ({cache_age.days} days old)")
-                        skipped += 1
-                        continue
-                
-                # 🛑 EXTRA DELAY BEFORE API CALL to prevent 429
-                print(f"  ⏳ Waiting 5s before API call for {ticker}...")
-                await asyncio.sleep(5)
-                
-                # Get integration logic from refresh_ticker_batch
-                # We need to duplicate the logic here or call a shared function. 
-                # Since refresh_ticker_batch is internal to refresh_all_tickers, we duplicate logic but optimized.
-                
-                # 1. Get financial data
-                financial_data = await get_real_financial_data(ticker, db=db_session, use_cache=True)
-                if not financial_data or not financial_data.get('price'):
-                    print(f"  ✗ {ticker} - No data available")
-                    failed += 1
-                    continue
-                
-                # 2. Check circuit breaker
-                if not gemini_circuit_breaker.can_proceed():
-                    print(f"  ⚠️ Circuit breaker open, stopping famous batch")
-                    break
-                
-                # 3. Generate AI analysis
-                # Initialize client if needed
-                local_client = client
-                if not local_client:
-                    local_client = genai.Client(api_key=API_KEY)
-                
-                ai_payload = {k: v for k, v in financial_data.items() if k != 'chart_data'}
-                
-                # Use the SAME prompt as main logic
-                prompt = f"""
+            # Retry logic state
+            attempts = 0
+            max_retries = 3
+            success = False
+            
+            while attempts < max_retries and not success:
+                attempts += 1
+                try:
+                    print(f"⭐ Refreshing Famous Ticker: {ticker} ({i+1}/{len(ticker_list)}) - Attempt {attempts}/{max_retries}")
+                    
+                    # Check cache freshness (only on first attempt to save DB calls, unless force)
+                    if attempts == 1 and not force_refresh:
+                        cached = db_session.query(AnalysisReport).filter(
+                            AnalysisReport.ticker == ticker,
+                            AnalysisReport.language == "en"
+                        ).order_by(AnalysisReport.updated_at.desc()).first()
+                        
+                        if cached:
+                            cache_age = datetime.now(timezone.utc) - make_datetime_aware(cached.updated_at)
+                            if cache_age < timedelta(days=7):
+                                print(f"  ✓ {ticker} already fresh ({cache_age.days} days old)")
+                                skipped += 1
+                                success = True
+                                break
+                    
+                    # 🛑 PRE-REQUEST DELAY: Standard 5s (or longer if retrying)
+                    delay = 5 if attempts == 1 else 10
+                    print(f"  ⏳ Waiting {delay}s before API call for {ticker}...")
+                    await asyncio.sleep(delay)
+                    
+                    # 1. Get financial data
+                    financial_data = await get_real_financial_data(ticker, db=db_session, use_cache=True)
+                    if not financial_data or not financial_data.get('price'):
+                        print(f"  ✗ {ticker} - No data available")
+                        # Don't retry if no data, likely invalid ticker
+                        break
+                    
+                    # 2. Check circuit breaker
+                    if not gemini_circuit_breaker.can_proceed():
+                        print(f"  ⚠️ Circuit breaker open, stopping famous batch")
+                        return # Stop the whole batch if circuit is broken
+                    
+                    # 3. Generate AI analysis
+                    local_client = client
+                    if not local_client:
+                        local_client = genai.Client(api_key=API_KEY)
+                    
+                    ai_payload = {k: v for k, v in financial_data.items() if k != 'chart_data'}
+                    
+                    prompt = f"""
 You are the Chief Investment Officer (CIO) at a prestigious Global Hedge Fund. 
 Your task is to produce an **EXHAUSTIVE, INSTITUTIONAL-GRADE INVESTMENT MEMO** for {ticker}.
 
@@ -4962,80 +4966,90 @@ Your task is to produce an **EXHAUSTIVE, INSTITUTIONAL-GRADE INVESTMENT MEMO** f
     "summary_one_line": "Executive summary"
 }}
 """
-                
-                response = await asyncio.to_thread(
-                    lambda: local_client.models.generate_content(
-                        model='gemini-2.0-flash',
-                        contents=prompt,
-                        config=types.GenerateContentConfig(
-                            response_mime_type="application/json",
-                            temperature=0.3
+                    
+                    response = await asyncio.to_thread(
+                        lambda: local_client.models.generate_content(
+                            model='gemini-2.0-flash',
+                            contents=prompt,
+                            config=types.GenerateContentConfig(
+                                response_mime_type="application/json",
+                                temperature=0.3
+                            )
                         )
                     )
-                )
-                
-                gemini_circuit_breaker.record_success()
-                analysis_json = json.loads(response.text)
-                
-                # Merge data
-                complete_data = {
-                    **analysis_json,
-                    "current_price": financial_data.get("price"),
-                    "company_name": financial_data.get("companyName"),
-                    "pe_ratio": financial_data.get("pe_ratio"),
-                    "forward_pe": financial_data.get("forward_pe"),
-                    "peg_ratio": financial_data.get("peg_ratio"),
-                    "price_to_sales": financial_data.get("price_to_sales"),
-                    "price_to_book": financial_data.get("price_to_book"),
-                    "eps": financial_data.get("eps"),
-                    "beta": financial_data.get("beta"),
-                    "dividend_yield": financial_data.get("dividend_yield"),
-                    "profit_margins": financial_data.get("profit_margins"),
-                    "operating_margins": financial_data.get("operating_margins"),
-                    "return_on_equity": financial_data.get("return_on_equity"),
-                    "debt_to_equity": financial_data.get("debt_to_equity"),
-                    "revenue_growth": financial_data.get("revenue_growth"),
-                    "current_ratio": financial_data.get("current_ratio"),
-                    "market_cap": financial_data.get("market_cap"),
-                    "fiftyTwoWeekHigh": financial_data.get("fiftyTwoWeekHigh"),
-                    "fiftyTwoWeekLow": financial_data.get("fiftyTwoWeekLow"),
-                    "targetMeanPrice": financial_data.get("targetMeanPrice"),
-                    "recommendationKey": financial_data.get("recommendationKey"),
-                    "chart_data": financial_data.get("chart_data", [])
-                }
-                
-                # Save report
-                if cached:
-                    cached.ai_json_data = json.dumps(complete_data)
-                    cached.updated_at = datetime.now(timezone.utc)
-                else:
-                    new_report = AnalysisReport(
-                        ticker=ticker,
-                        language="en",
-                        ai_json_data=json.dumps(complete_data),
-                        created_at=datetime.now(timezone.utc),
-                        updated_at=datetime.now(timezone.utc)
-                    )
-                    db_session.add(new_report)
-                
-                db_session.commit()
-                refreshed += 1
-                print(f"  ✅ {ticker} refreshed successfully")
-                
-                # 🛑 POST-REQUEST DELAY (Standard 10s)
-                print(f"  ⏳ Cooldown 10s...")
-                await asyncio.sleep(10)
-                
-            except Exception as e:
-                gemini_circuit_breaker.record_failure()
-                print(f"  ✗ {ticker} failed: {e}")
-                failed += 1
-                db_session.rollback()
-                
-                # 🛑 ERROR BACKOFF: If we failed, wait longer (30s) to let API recover
-                print(f"  ⚠️ Error encountered. Waiting 30s to cool down...")
-                await asyncio.sleep(30)
-                continue
+                    
+                    gemini_circuit_breaker.record_success()
+                    analysis_json = json.loads(response.text)
+                    
+                    # Merge data
+                    complete_data = {
+                        **analysis_json,
+                        "current_price": financial_data.get("price"),
+                        "company_name": financial_data.get("companyName"),
+                        "pe_ratio": financial_data.get("pe_ratio"),
+                        "forward_pe": financial_data.get("forward_pe"),
+                        "peg_ratio": financial_data.get("peg_ratio"),
+                        "price_to_sales": financial_data.get("price_to_sales"),
+                        "price_to_book": financial_data.get("price_to_book"),
+                        "eps": financial_data.get("eps"),
+                        "beta": financial_data.get("beta"),
+                        "dividend_yield": financial_data.get("dividend_yield"),
+                        "profit_margins": financial_data.get("profit_margins"),
+                        "operating_margins": financial_data.get("operating_margins"),
+                        "return_on_equity": financial_data.get("return_on_equity"),
+                        "debt_to_equity": financial_data.get("debt_to_equity"),
+                        "revenue_growth": financial_data.get("revenue_growth"),
+                        "current_ratio": financial_data.get("current_ratio"),
+                        "market_cap": financial_data.get("market_cap"),
+                        "fiftyTwoWeekHigh": financial_data.get("fiftyTwoWeekHigh"),
+                        "fiftyTwoWeekLow": financial_data.get("fiftyTwoWeekLow"),
+                        "targetMeanPrice": financial_data.get("targetMeanPrice"),
+                        "recommendationKey": financial_data.get("recommendationKey"),
+                        "chart_data": financial_data.get("chart_data", [])
+                    }
+                    
+                    # Save report - Check for existing record AGAIN to avoid race conditions
+                    existing_report = db_session.query(AnalysisReport).filter(
+                        AnalysisReport.ticker == ticker,
+                        AnalysisReport.language == "en"
+                    ).first()
+                    
+                    if existing_report:
+                        existing_report.ai_json_data = json.dumps(complete_data)
+                        existing_report.updated_at = datetime.now(timezone.utc)
+                    else:
+                        new_report = AnalysisReport(
+                            ticker=ticker,
+                            language="en",
+                            ai_json_data=json.dumps(complete_data),
+                            created_at=datetime.now(timezone.utc),
+                            updated_at=datetime.now(timezone.utc)
+                        )
+                        db_session.add(new_report)
+                    
+                    db_session.commit()
+                    refreshed += 1
+                    success = True
+                    print(f"  ✅ {ticker} refreshed successfully")
+                    
+                    # 🛑 POST-REQUEST DELAY (Standard 10s)
+                    print(f"  ⏳ Cooldown 10s...")
+                    await asyncio.sleep(10)
+                    
+                except Exception as e:
+                    gemini_circuit_breaker.record_failure()
+                    print(f"  ✗ {ticker} attempt {attempts} failed: {e}")
+                    db_session.rollback()
+                    
+                    if attempts < max_retries:
+                        # 🛑 EXPONENTIAL BACKOFF
+                        # If 429, wait 60s. For others, wait 10s.
+                        wait_time = 60 if "429" in str(e) else 10
+                        print(f"  ⚠️ Retrying {ticker} in {wait_time}s...")
+                        await asyncio.sleep(wait_time)
+                    else:
+                        print(f"  ❌ {ticker} failed permanently after {max_retries} attempts.")
+                        failed += 1
         
         print(f"\n🎉 FAMOUS TICKERS SYNC COMPLETE")
         print(f"  ✅ Refreshed: {refreshed}")
