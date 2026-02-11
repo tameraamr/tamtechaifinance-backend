@@ -40,6 +40,17 @@ def make_datetime_aware(dt):
 # Load environment variables
 load_dotenv()
 
+# --- Famous Tickers List ---
+# High-profile stocks that should be prioritized for analysis
+FAMOUS_TICKERS = [
+    "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "TSLA", "META", "BRK-B", "TSM", "V", 
+    "UNH", "JNJ", "WMT", "JPM", "XOM", "PG", "MA", "HD", "CVX", "MRK", 
+    "PEP", "KO", "ABBV", "BAC", "COST", "AVGO", "MCD", "CSCO", "CRM", "ACN",
+    "ADBE", "LIN", "AMD", "NFLX", "DIS", "NKE", "INTC", "QCOM", "TXN", "DHR",
+    "SPY", "QQQ", "DIA", "IWM", "VTI", "VOO", "VEA", "VWO",
+    "BTC-USD", "ETH-USD", "GC=F", "SI=F", "CL=F", "EURUSD=X"
+]
+
 # --- Database & Security (PostgreSQL ONLY) ---
 DATABASE_URL = os.getenv("DATABASE_URL")
 
@@ -4791,6 +4802,250 @@ Your task is to produce an **EXHAUSTIVE, INSTITUTIONAL-GRADE INVESTMENT MEMO** f
         "stale_reports": stale_count if not force else total_tickers,
         "estimated_time": f"{total_tickers * 10 / 60:.0f} minutes" if force else f"{stale_count * 10 / 60:.0f} minutes",
         "estimated_cost": f"${total_tickers * 0.002:.2f}",
+        "status": "Check server logs for progress"
+    }
+
+
+
+@app.post("/admin/refresh-famous-tickers")
+async def refresh_famous_tickers(
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    admin_key: str = None,
+    force: bool = False
+):
+    """
+    ⭐ ADMIN ENDPOINT: Refresh ONLY the famous/popular tickers
+    
+    Targeted refresh for the most important assets to ensure they are always fresh.
+    Includes extra delay to prevent 429 Too Many Requests errors.
+    
+    Usage:
+    POST /admin/refresh-famous-tickers?admin_key=YOUR_SECRET_KEY
+    """
+    
+    # Simple admin key check
+    ADMIN_SECRET = os.getenv("ADMIN_REFRESH_KEY", "tamtech_refresh_2026")
+    
+    if admin_key != ADMIN_SECRET:
+        raise HTTPException(
+            status_code=403,
+            detail="Invalid admin key. Set ?admin_key=YOUR_SECRET_KEY"
+        )
+    
+    # Use the defined FAMOUS_TICKERS list
+    tickers_to_refresh = FAMOUS_TICKERS
+    
+    # Check how many actually need refresh (if not forced)
+    seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
+    
+    stale_count = 0
+    if not force:
+        stale_count = db.query(AnalysisReport).filter(
+            AnalysisReport.ticker.in_(tickers_to_refresh),
+            AnalysisReport.updated_at < seven_days_ago
+        ).count()
+    else:
+        stale_count = len(tickers_to_refresh)
+        
+    async def refresh_famous_batch(ticker_list, db_session, force_refresh):
+        """Background task to refresh famous tickers with EXTRA delay"""
+        refreshed = 0
+        failed = 0
+        skipped = 0
+        
+        print(f"🚀 STARTING FAMOUS TICKER REFRESH: {len(ticker_list)} tickers")
+        
+        for i, ticker in enumerate(ticker_list):
+            try:
+                print(f"⭐ Refreshing Famous Ticker: {ticker} ({i+1}/{len(ticker_list)})")
+                
+                # Check if already fresh (less than 7 days old) - unless force=true
+                cached = db_session.query(AnalysisReport).filter(
+                    AnalysisReport.ticker == ticker,
+                    AnalysisReport.language == "en"
+                ).order_by(AnalysisReport.updated_at.desc()).first()
+                
+                if cached and not force_refresh:
+                    cache_age = datetime.now(timezone.utc) - make_datetime_aware(cached.updated_at)
+                    if cache_age < timedelta(days=7):
+                        print(f"  ✓ {ticker} already fresh ({cache_age.days} days old)")
+                        skipped += 1
+                        continue
+                
+                # 🛑 EXTRA DELAY BEFORE API CALL to prevent 429
+                print(f"  ⏳ Waiting 5s before API call for {ticker}...")
+                await asyncio.sleep(5)
+                
+                # Get integration logic from refresh_ticker_batch
+                # We need to duplicate the logic here or call a shared function. 
+                # Since refresh_ticker_batch is internal to refresh_all_tickers, we duplicate logic but optimized.
+                
+                # 1. Get financial data
+                financial_data = await get_real_financial_data(ticker, db=db_session, use_cache=True)
+                if not financial_data or not financial_data.get('price'):
+                    print(f"  ✗ {ticker} - No data available")
+                    failed += 1
+                    continue
+                
+                # 2. Check circuit breaker
+                if not gemini_circuit_breaker.can_proceed():
+                    print(f"  ⚠️ Circuit breaker open, stopping famous batch")
+                    break
+                
+                # 3. Generate AI analysis
+                # Initialize client if needed
+                local_client = client
+                if not local_client:
+                    local_client = genai.Client(api_key=API_KEY)
+                
+                ai_payload = {k: v for k, v in financial_data.items() if k != 'chart_data'}
+                
+                # Use the SAME prompt as main logic
+                prompt = f"""
+You are the Chief Investment Officer (CIO) at a prestigious Global Hedge Fund. 
+Your task is to produce an **EXHAUSTIVE, INSTITUTIONAL-GRADE INVESTMENT MEMO** for {ticker}.
+
+**Financial Data & News:** {json.dumps(ai_payload, default=str)}
+**Language:** Write strictly in English.
+
+**⚠️ CRITICAL INSTRUCTIONS:**
+1.  **EXTREME DEPTH:** Each text section must be LONG, DETAILED, and ANALYTICAL (aim for 400-600 words per chapter).
+2.  **SENTIMENT ANALYSIS:** Analyze the provided 'recent_news'. For each major news item, determine if it's Positive, Negative, or Neutral and assign an Impact Score (1-10).
+3.  **NO FLUFF:** Use professional financial terminology. Connect the news to the valuation.
+4.  **JSON FORMATTING:** You MUST return ONLY valid JSON. NO markdown code blocks, NO extra text. Ensure all quotes inside text fields are properly escaped.
+5.  **STRUCTURE:** Return strictly the JSON structure below.
+
+**REQUIRED JSON OUTPUT:**
+{{
+    "chapter_1_the_business": "Headline: The Business DNA. [Write 400+ words detailed essay]",
+    "chapter_2_financials": "Headline: Financial Health. [Write 400+ words detailed essay]",
+    "chapter_3_valuation": "Headline: Valuation Check. [Write 400+ words detailed essay]",
+    "upcoming_catalysts": {{
+        "next_earnings_date": "State the estimated or confirmed date",
+        "event_importance": "High/Medium/Low",
+        "analyst_expectation": "Briefly state what the market expects"
+    }},
+    "competitors": [
+        {{ "name": "Competitor 1", "ticker": "TICK1", "strength": "Main advantage" }},
+        {{ "name": "Competitor 2", "ticker": "TICK2", "strength": "Main advantage" }}
+    ],
+    "ownership_insights": {{
+        "institutional_sentiment": "Describe if institutions are buying/holding",
+        "insider_trading": "Briefly mention recent insider activity",
+        "dividend_safety": "Analyze dividend sustainability"
+    }},
+    "news_analysis": [
+        {{ "headline": "Title", "sentiment": "positive/negative/neutral", "impact_score": 8, "url": "link", "time": "2 hours ago" }}
+    ],
+    "bull_case_points": ["Point 1", "Point 2", "Point 3"],
+    "bear_case_points": ["Point 1", "Point 2", "Point 3"],
+    "forecasts": {{
+        "next_1_year": "12-month scenario analysis",
+        "next_5_years": "2030 outlook"
+    }},
+    "swot_analysis": {{
+        "strengths": ["S1", "S2", "S3"],
+        "weaknesses": ["W1", "W2", "W3"],
+        "opportunities": ["O1", "O2", "O3"],
+        "threats": ["T1", "T2", "T3"]
+    }},
+    "radar_scores": [
+        {{ "subject": "Value", "A": 8 }}, 
+        {{ "subject": "Growth", "A": 7 }},
+        {{ "subject": "Profitability", "A": 9 }}, 
+        {{ "subject": "Health", "A": 6 }},
+        {{ "subject": "Momentum", "A": 8 }}
+    ],
+    "verdict": "BUY/HOLD/SELL", 
+    "confidence_score": 85, 
+    "summary_one_line": "Executive summary"
+}}
+"""
+                
+                response = await asyncio.to_thread(
+                    lambda: local_client.models.generate_content(
+                        model='gemini-2.0-flash',
+                        contents=prompt,
+                        config=types.GenerateContentConfig(
+                            response_mime_type="application/json",
+                            temperature=0.3
+                        )
+                    )
+                )
+                
+                gemini_circuit_breaker.record_success()
+                analysis_json = json.loads(response.text)
+                
+                # Merge data
+                complete_data = {
+                    **analysis_json,
+                    "current_price": financial_data.get("price"),
+                    "company_name": financial_data.get("companyName"),
+                    "pe_ratio": financial_data.get("pe_ratio"),
+                    "forward_pe": financial_data.get("forward_pe"),
+                    "peg_ratio": financial_data.get("peg_ratio"),
+                    "price_to_sales": financial_data.get("price_to_sales"),
+                    "price_to_book": financial_data.get("price_to_book"),
+                    "eps": financial_data.get("eps"),
+                    "beta": financial_data.get("beta"),
+                    "dividend_yield": financial_data.get("dividend_yield"),
+                    "profit_margins": financial_data.get("profit_margins"),
+                    "operating_margins": financial_data.get("operating_margins"),
+                    "return_on_equity": financial_data.get("return_on_equity"),
+                    "debt_to_equity": financial_data.get("debt_to_equity"),
+                    "revenue_growth": financial_data.get("revenue_growth"),
+                    "current_ratio": financial_data.get("current_ratio"),
+                    "market_cap": financial_data.get("market_cap"),
+                    "fiftyTwoWeekHigh": financial_data.get("fiftyTwoWeekHigh"),
+                    "fiftyTwoWeekLow": financial_data.get("fiftyTwoWeekLow"),
+                    "targetMeanPrice": financial_data.get("targetMeanPrice"),
+                    "recommendationKey": financial_data.get("recommendationKey"),
+                    "chart_data": financial_data.get("chart_data", [])
+                }
+                
+                # Save report
+                if cached:
+                    cached.ai_json_data = json.dumps(complete_data)
+                    cached.updated_at = datetime.now(timezone.utc)
+                else:
+                    new_report = AnalysisReport(
+                        ticker=ticker,
+                        language="en",
+                        ai_json_data=json.dumps(complete_data),
+                        created_at=datetime.now(timezone.utc),
+                        updated_at=datetime.now(timezone.utc)
+                    )
+                    db_session.add(new_report)
+                
+                db_session.commit()
+                refreshed += 1
+                print(f"  ✅ {ticker} refreshed successfully")
+                
+                # 🛑 POST-REQUEST DELAY (Standard 10s)
+                print(f"  ⏳ Cooldown 10s...")
+                await asyncio.sleep(10)
+                
+            except Exception as e:
+                gemini_circuit_breaker.record_failure()
+                print(f"  ✗ {ticker} failed: {e}")
+                failed += 1
+                db_session.rollback()
+                continue
+        
+        print(f"\n🎉 FAMOUS TICKERS SYNC COMPLETE")
+        print(f"  ✅ Refreshed: {refreshed}")
+        print(f"  ⏭️  Skipped: {skipped}")
+        print(f"  ✗ Failed: {failed}")
+
+    # Start background task
+    background_tasks.add_task(refresh_famous_batch, tickers_to_refresh, db, force)
+    
+    return {
+        "success": True,
+        "message": f"Famous tickers refresh started in background",
+        "total_tickers": len(tickers_to_refresh),
+        "stale_count": stale_count,
         "status": "Check server logs for progress"
     }
 

@@ -42,6 +42,17 @@ Invoke-WebRequest -Uri "https://tamtechaifinance-backend-production.up.railway.a
 curl -X POST "https://tamtechaifinance-backend-production.up.railway.app/admin/refresh-all-tickers?admin_key=tamtech_refresh_2026"
 ```
 
+### **Option 4: Refresh ONLY Famous Tickers (Recommended)**
+Since this list is smaller (top ~50 companies), it's faster and safer to run frequent updates:
+
+```
+POST https://tamtechaifinance-backend-production.up.railway.app/admin/refresh-famous-tickers?admin_key=tamtech_refresh_2026
+```
+**Features:**
+- Includes **5s delay** before each call to prevent 429 errors
+- Focuses on AAPL, MSFT, GOOGL, NVDA, TSLA, etc.
+
+
 ---
 
 ## 📊 Check Cache Status
